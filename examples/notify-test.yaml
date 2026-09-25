@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/tigusigalpa/watchdog/main/schema/watchdog.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
 # Replace the SMTP host and addresses, then export WATCHDOG_SMTP_PASSWORD.
 # bash service-watchdog.sh notify-test -c examples/notify-test.yaml -s api --channel email
 settings:
