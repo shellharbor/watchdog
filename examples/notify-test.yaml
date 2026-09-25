@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/tigusigalpa/watchdog/main/schema/watchdog.schema.json
+# Replace the SMTP host and addresses, then export WATCHDOG_SMTP_PASSWORD.
+# bash service-watchdog.sh notify-test -c examples/notify-test.yaml -s api --channel email
+settings:
+  log_file: /var/log/service-watchdog/service-watchdog.log
+  lock_file: /run/lock/service-watchdog.lock
+  state_directory: /var/lib/service-watchdog
+notifications:
+  email:
+    enabled: true
+    smtp:
+      url: smtps://smtp.example.com:465
+      from: watchdog@example.com
+      username: watchdog@example.com
+      password_env: WATCHDOG_SMTP_PASSWORD
+    recipients: [operator@example.com]
+    failure:
+      subject: "Watchdog alert for {{service}}"
+      body: "{{detail}} (incident {{incident_id}})"
+    recovery:
+      subject: "Watchdog recovery for {{service}}"
+      body: "Recovered at {{timestamp}}"
+services:
+  - name: api
+    check:
+      type: http
+      url: https://example.com/health

@@ -1,0 +1,430 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+settings:
+  log_file: /var/log/service-watchdog/service-watchdog.log
+  lock_file: /run/lock/service-watchdog.lock
+  state_directory: /var/lib/service-watchdog
+
+  default_timeout: 10
+  default_attempts: 2
+  default_retry_delay: 2
+  default_action_timeout: 120
+  default_action_cooldown: 300
+
+# Existing installations remain in legacy mode. To enforce a command policy,
+# change mode to enforce and list the exact absolute executable + argument
+# vectors used by every remediation and escalation action (see the Market Data
+# example). Checks and hooks have a separate trust boundary.
+security:
+  remediation_policy:
+    mode: legacy
+
+# Run only health checks concurrently. State changes, remediation, hooks, and
+# notifications remain sequential, so state files and alert delivery are safe.
+parallel:
+  enabled: false
+  # 0 means unlimited. Set a limit to avoid overloading local resources.
+  max_jobs: 10
+  # Per-check fallback timeout; a service's check.timeout takes precedence.
+  timeout: 60
+  # Empty uses /tmp/watchdog. Set a writable absolute directory if needed.
+  temp_dir: ""
+
+# Optional distributed monitoring. Run the agent and hub as separate one-shot
+# watchdog instances; the hub never opens an HTTP port itself.
+federation:
+  enabled: false
+  # Empty uses `hostname -s`.
+  node_id: web-01
+
+  # Agent configuration: send the local snapshot after all checks finish.
+  agent:
+    enabled: false
+    transport: http
+    hub_url: https://watchdog-hub.internal/api/v1/report
+    token_env: WATCHDOG_HUB_TOKEN
+    timeout: 10
+    report_path: /var/lib/service-watchdog/federation-report.json
+    # Set transport: file to atomically write report_path. Deliver it with
+    # rsync, scp, Syncthing, S3, or another external transport.
+    heartbeat: true
+
+  # Hub configuration: use this in a separate config with `services: []`.
+  hub:
+    enabled: false
+    incoming_dir: /var/lib/watchdog-hub/incoming
+    archive_dir: /var/lib/watchdog-hub/archive
+    max_report_age: 300
+    archive_retention_days: 7
+    expected_nodes:
+      - web-01
+      - web-02
+    notify_on:
+      overall_change: true
+      agent_offline: true
+      any_service_change: false
+    templates:
+      overall_failure:
+        subject: "[FEDERATION] Infrastructure status: {{overall_status}}"
+        body: |-
+          Overall status changed to {{overall_status}}.
+
+          Unhealthy services:
+          {{unhealthy_services}}
+
+          Offline agents:
+          {{offline_nodes}}
+      overall_recovery:
+        subject: "[FEDERATION] Infrastructure recovered: {{overall_status}}"
+        body: "All services are operational. Previously: {{previous_status}}"
+      agent_offline:
+        subject: "[FEDERATION] Agent {{node_id}} is offline"
+        body: "Agent {{node_id}} has not reported for {{age_seconds}} seconds."
+
+# Optional Prometheus node_exporter textfile collector integration.
+metrics:
+  enabled: false
+  textfile_directory: /var/lib/node_exporter/textfile_collector
+  filename: watchdog.prom
+  prefix: watchdog
+  static_labels:
+    instance: prod-web-01
+    datacenter: msk-1
+
+# Optional self-hosted static status page.
+status_page:
+  enabled: false
+  output_directory: /var/www/status
+  html_filename: index.html
+  json_filename: status.json
+  title: My Services Status
+  description: Real-time availability of monitored services
+  logo_url: ""
+  auto_refresh: 60
+  footer: Powered by Watchdog
+  theme:
+    primary: "2563eb"
+    danger: "dc2626"
+    warning: "f59e0b"
+    bg: "f8fafc"
+    card: "ffffff"
+    text: "1e293b"
+    muted: "64748b"
+
+# Optional, explicit offline generator. It does not run during normal watchdog
+# checks. Run bash ./watchdog-discover.sh --config config.yaml --dry-run first.
+# Generated services are a draft: review and merge them into config.yaml.
+discovery:
+  enabled: false
+  # Leave empty for stdout. If set, this must be an absolute directory.
+  output_dir: ""
+  output_prefix: "auto-"
+  docker_compose:
+    enabled: false
+    sources:
+      - /srv/project-a/compose.yml
+      - /srv/project-b
+    only_with_healthcheck: false
+    skip_labels: ["watchdog.ignore=true"]
+    http_ports: [80, 443, 8080, 3000, 8000, 8081, 8443]
+    default_actions:
+      cooldown: 300
+      verify_after: 10
+      commands:
+        - command: [docker, compose, restart, "{{service_name}}"]
+          working_directory: "{{compose_dir}}"
+          timeout: 120
+  systemd:
+    enabled: false
+    sources:
+      - /etc/systemd/system/myapp-*.service
+    only_service_types: [simple, notify, forking]
+    skip_patterns: ["@", watchdog]
+    detect_ports: true
+    default_actions:
+      cooldown: 300
+      verify_after: 10
+      commands:
+        - command: [systemctl, restart, "{{unit_name}}"]
+          timeout: 60
+
+# Built-in email is transition-based: one message when a service becomes
+# unavailable and one message when it becomes healthy again.
+notifications:
+  email:
+    enabled: false
+
+    smtp:
+      url: smtps://smtp.example.com:465
+      from: watchdog@example.com
+      username: watchdog@example.com
+      password_env: WATCHDOG_SMTP_PASSWORD
+      tls_required: true
+      insecure_skip_verify: false
+      timeout: 30
+
+    recipients:
+      - ops@example.com
+
+    failure:
+      subject: "[watchdog] {{service}} is unavailable"
+      body: |-
+        A service availability problem was detected.
+
+        Service: {{service}}
+        Time: {{timestamp}}
+        Check: {{check_type}}
+        Detail: {{detail}}
+        HTTP status: {{http_status}}
+        Check exit: {{check_exit}}
+        Remediation: {{action_status}}
+
+        This alert is sent once and will not repeat until the service recovers.
+
+    recovery:
+      subject: "[watchdog] {{service}} recovered"
+      body: |-
+        The service is available again.
+
+        Service: {{service}}
+        Time: {{timestamp}}
+        Check: {{check_type}}
+        Detail: {{detail}}
+        Remediation: {{action_status}}
+
+  # Webhooks are also transition-based. Keep tokens and webhook URLs in the
+  # environment, never in this file. Each provider may be enabled separately.
+  webhooks:
+    telegram:
+      enabled: false
+      bot_token_env: WATCHDOG_TG_BOT_TOKEN
+      chat_id: "-1001234567890"
+      # thread_id: "42"  # Optional Telegram forum topic.
+      template:
+        failure: "🚨 <b>{{service}}</b> DOWN\n\nType: {{check_type}}\nDetail: {{detail}}\nTime: {{timestamp}}"
+        recovery: "✅ <b>{{service}}</b> UP\n\nRecovered at {{timestamp}}"
+
+    discord:
+      enabled: false
+      webhook_url_env: WATCHDOG_DISCORD_WEBHOOK_URL
+      template:
+        failure: '{"content":"🚨 **{{service}}** is unavailable: {{detail}}"}'
+        recovery: '{"content":"✅ **{{service}}** recovered"}'
+
+    slack:
+      enabled: false
+      webhook_url_env: WATCHDOG_SLACK_WEBHOOK_URL
+      template:
+        failure: '{"text":"🚨 {{service}} DOWN: {{detail}}"}'
+        recovery: '{"text":"✅ {{service}} recovered"}'
+
+    ntfy:
+      enabled: false
+      url: https://ntfy.sh/watchdog-alerts
+      token_env: WATCHDOG_NTFY_TOKEN  # Optional; remove for public topics.
+      priority: urgent
+      template:
+        failure: "🚨 {{service}} unavailable: {{detail}}"
+        recovery: "✅ {{service}} recovered"
+
+# Optional commands invoked only when a service changes state. Every command
+# receives WATCHDOG_SERVICE, WATCHDOG_EVENT, WATCHDOG_DETAIL,
+# WATCHDOG_CHECK_TYPE, WATCHDOG_HTTP_STATUS, and WATCHDOG_CHECK_EXIT.
+hooks:
+  on_failure: []
+  on_recovery: []
+
+# Reusable service defaults. A service's own values override template values;
+# deep merge is the default, so `check.url` below keeps all HTTP defaults.
+templates:
+  default_http:
+    check:
+      type: http
+      method: GET
+      follow_redirects: true
+      success_status: [200]
+      timeout: 10
+      attempts: 2
+      retry_delay: 2
+    actions:
+      cooldown: 300
+      verify_after: 5
+
+  strict_tcp:
+    check:
+      type: tcp
+      timeout: 5
+      attempts: 1
+      retry_delay: 1
+    actions:
+      cooldown: 60
+      verify_after: 3
+
+  service_command:
+    check:
+      type: command
+      attempts: 1
+      retry_delay: 0
+    actions:
+      cooldown: 300
+      verify_after: 2
+
+services:
+  - name: example-website
+    template: default_http
+    # Set false to keep this individual check out of a parallel batch.
+    parallel: false
+    check:
+      url: https://example.com/health
+
+    # Do not check or restart while a backup marker is present.
+    only_if:
+      - type: file_exists
+        path: /var/run/backup-in-progress
+        invert: true
+
+    actions:
+      # Both cooldown and backoff must expire before another action may run.
+      backoff:
+        enabled: true
+        initial_delay: 60
+        multiplier: 2
+        max_delay: 1800
+      commands:
+        - command:
+            - docker
+            - compose
+            - restart
+            - web
+          # working_directory: /srv/example  # Enable after creating this path.
+          timeout: 120
+
+    # After three state changes in five minutes, pause automatic remediation
+    # for at least ten minutes and require two minutes of stable health.
+    flapping:
+      enabled: true
+      window_seconds: 300
+      threshold: 3
+      hold_seconds: 600
+      recovery_seconds: 120
+      notify: true
+
+    # Checks continue during these periods, while remediation, email, webhooks,
+    # and hooks are suppressed. Windows must start and end on the same day.
+    maintenance:
+      timezone: Europe/Moscow
+      windows:
+        - name: nightly-backup
+          days: "Sun,Wed"
+          time: "02:00-04:00"
+        - name: weekend-deploy
+          days: "Sat,Sun"
+          time: "00:00-06:00"
+
+    # Required dependencies are checked first. If one is unavailable, this
+    # service is recorded as dependency_failed without check or remediation.
+    depends_on:
+      - name: local-postgresql
+        required: true
+
+  - name: local-postgresql
+    template: strict_tcp
+    check:
+      host: 127.0.0.1
+      port: 5432
+
+    # Avoid remediation while the host is already under high load.
+    only_if:
+      - type: load_average
+        max_1min: 4.0
+
+    actions:
+      commands:
+        - command:
+            - systemctl
+            - restart
+            - postgresql
+
+  - name: background-worker
+    template: service_command
+    check:
+      commands:
+        - command:
+            - systemctl
+            - is-active
+            - --quiet
+            - example-worker
+
+    # A command condition can combine any local policy checks.
+    only_if:
+      - type: command
+        command: [test, -f, /var/run/allow-worker-check]
+        timeout: 5
+    actions:
+      commands:
+        - command:
+            - systemctl
+            - restart
+            - example-worker
+
+    # Escalate only after normal remediation has not restored the service for
+    # several consecutive watchdog runs.
+    escalation:
+      enabled: true
+      after_consecutive_unavailable: 3
+      cooldown: 3600
+      notify: true
+      # Optional incident-level thresholds; each level fires once per incident.
+      levels:
+        - after_duration_seconds: 900
+          notify: true
+        - after_failed_remediations: 5
+          notify: true
+          manual_intervention: true
+      actions:
+        commands:
+          - command:
+              - systemctl
+              - restart
+              - docker
+            timeout: 60
+      hooks:
+        on_escalation:
+          - command:
+              - /usr/local/bin/page-oncall
+            timeout: 30
+
+    circuit_breaker:
+      enabled: true
+      failure_threshold: 3
+      open_duration: 1800
+      half_open_verify_after: 30
+      notify: true
+      hooks:
+        on_open:
+          - command: [/usr/local/bin/notify-sre]
+            timeout: 30
+        on_close:
+          - command: [/usr/local/bin/notify-sre]
+            timeout: 30
+
+  - name: public-frontend
+    template: default_http
+    check:
+      url: https://example.com
+    depends_on:
+      - name: example-website
+        required: true
+      - name: local-postgresql
+        required: false
+
+  - name: staging-api
+    template: default_http
+    check:
+      url: https://staging.example.com/health
+    # Check staging outside Moscow business hours only.
+    only_if:
+      - type: time_window
+        days: "Mon,Tue,Wed,Thu,Fri"
+        time: "09:00-18:00"
+        timezone: Europe/Moscow
+        invert: true

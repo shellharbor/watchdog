@@ -1,0 +1,93 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+# Adapt systemd unit names and absolute executable paths to your host, then
+# run: ./service-watchdog.sh validate -c examples/market-data-server.yaml
+# The Market Data Server must implement /liveness and /readiness; Watchdog does
+# not perform market-data backfill.
+settings:
+  log_file: /var/log/service-watchdog/service-watchdog.log
+  lock_file: /run/lock/service-watchdog.lock
+  state_directory: /var/lib/service-watchdog
+  default_timeout: 5
+  default_attempts: 1
+  default_retry_delay: 0
+  default_action_cooldown: 300
+
+security:
+  remediation_policy:
+    mode: enforce
+    allowed_commands:
+      - command: [/usr/bin/systemctl, restart, postgresql.service]
+      - command: [/usr/bin/systemctl, restart, market-data.service]
+
+metrics:
+  enabled: true
+  textfile_directory: /var/lib/node_exporter/textfile_collector
+  filename: watchdog.prom
+  prefix: watchdog
+  static_labels:
+    instance: market-data-01
+
+services:
+  - name: postgresql
+    check:
+      type: tcp
+      host: 127.0.0.1
+      port: 5432
+      timeout: 3
+    actions:
+      cooldown: 300
+      backoff: {enabled: true, initial_delay: 60, multiplier: 2, max_delay: 1800}
+      commands:
+        - command: [/usr/bin/systemctl, restart, postgresql.service]
+          timeout: 30
+      verify_after: 10
+    flapping: {enabled: true, window_seconds: 300, threshold: 4, hold_seconds: 600, recovery_seconds: 120, notify: true}
+    escalation:
+      enabled: true
+      after_consecutive_unavailable: 3
+      cooldown: 3600
+      notify: true
+      levels:
+        - after_duration_seconds: 900
+          notify: true
+        - after_failed_remediations: 5
+          notify: true
+          manual_intervention: true
+
+  - name: market-data
+    depends_on:
+      - name: postgresql
+        required: true
+    health:
+      liveness:
+        type: http
+        url: http://127.0.0.1:8080/liveness
+        success_status: [200]
+        timeout: 3
+        attempts: 2
+      readiness:
+        type: http
+        url: http://127.0.0.1:8080/readiness
+        success_status: [200]
+        timeout: 3
+        attempts: 1
+    actions:
+      cooldown: 300
+      backoff: {enabled: true, initial_delay: 60, multiplier: 2, max_delay: 1800}
+      commands:
+        - command: [/usr/bin/systemctl, restart, market-data.service]
+          timeout: 30
+      verify_after: 15
+    flapping: {enabled: true, window_seconds: 300, threshold: 4, hold_seconds: 600, recovery_seconds: 120, notify: true}
+    escalation:
+      enabled: true
+      after_consecutive_unavailable: 3
+      after_duration_seconds: 900
+      cooldown: 3600
+      notify: true
+      levels:
+        - after_duration_seconds: 1800
+          notify: true
+        - after_failed_remediations: 5
+          notify: true
+          manual_intervention: true

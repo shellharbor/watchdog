@@ -1,0 +1,16 @@
+settings:
+  log_file: /tmp/watchdog-schema-test.log
+  lock_file: /tmp/watchdog-schema-test.lock
+  state_directory: /tmp/watchdog-schema-test-state
+services:
+  - name: broken
+    check:
+      type: http
+      url: https://example.com
+    health:
+      liveness:
+        type: http
+        url: https://example.com/live
+      readiness:
+        type: http
+        url: https://example.com/ready

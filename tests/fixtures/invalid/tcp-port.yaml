@@ -1,0 +1,10 @@
+settings:
+  log_file: /tmp/watchdog-schema-test.log
+  lock_file: /tmp/watchdog-schema-test.lock
+  state_directory: /tmp/watchdog-schema-test-state
+services:
+  - name: broken
+    check:
+      type: tcp
+      host: 127.0.0.1
+      port: 70000

@@ -1,0 +1,9 @@
+[Unit]
+Description=Example application
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/example-app --port=3000
+
+[Install]
+WantedBy=multi-user.target

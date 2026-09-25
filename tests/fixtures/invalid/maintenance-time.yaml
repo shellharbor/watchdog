@@ -1,0 +1,14 @@
+settings:
+  log_file: /tmp/watchdog-schema-test.log
+  lock_file: /tmp/watchdog-schema-test.lock
+  state_directory: /tmp/watchdog-schema-test-state
+services:
+  - name: broken
+    check:
+      type: command
+      commands:
+        - command: [true]
+    maintenance:
+      windows:
+        - days: Mon
+          time: 25:00-26:00

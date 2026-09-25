@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+# bash service-watchdog.sh status -c examples/status-cli.yaml --json
+# Run the normal monitor separately to populate the state directory.
+settings:
+  log_file: /var/log/service-watchdog/service-watchdog.log
+  lock_file: /run/lock/service-watchdog.lock
+  state_directory: /var/lib/service-watchdog
+services:
+  - name: api
+    check:
+      type: http
+      url: https://example.com/health
+    actions:
+      cooldown: 300

@@ -1,0 +1,384 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json",
+  "title": "Watchdog configuration",
+  "description": "Configuration for the one-shot service-watchdog.sh monitor. Dynamic checks such as dependency cycles, installed time zones and command allowlists still require `service-watchdog.sh validate`.",
+  "type": "object",
+  "required": ["settings", "services"],
+  "properties": {
+    "settings": { "$ref": "#/$defs/settings", "description": "Runtime paths and default check/action timing." },
+    "services": { "type": "array", "description": "Services to monitor; an empty array is allowed for a federation hub.", "items": { "$ref": "#/$defs/service" } },
+    "templates": { "type": "object", "description": "Reusable partial service definitions, merged before Bash validation.", "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "$ref": "#/$defs/serviceFields" } },
+    "notifications": { "$ref": "#/$defs/notifications", "description": "Transition-based email and webhook delivery." },
+    "hooks": { "$ref": "#/$defs/hooks", "description": "Commands run on failure and recovery transitions." },
+    "security": { "$ref": "#/$defs/security", "description": "Optional exact-command remediation allowlist." },
+    "parallel": { "$ref": "#/$defs/parallel", "description": "Parallelize only the check phase." },
+    "federation": { "$ref": "#/$defs/federation", "description": "Optional one-shot agent or hub mode." },
+    "metrics": { "$ref": "#/$defs/metrics", "description": "Prometheus textfile collector output." },
+    "status_page": { "$ref": "#/$defs/statusPage", "description": "Static HTML and JSON status page output." },
+    "discovery": { "$ref": "#/$defs/discovery", "description": "Optional offline draft generator settings, read by watchdog-discover.sh rather than the monitor." }
+  },
+  "if": { "properties": { "federation": { "properties": { "hub": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["hub"] } }, "required": ["federation"] },
+  "else": { "properties": { "services": { "minItems": 1 } } },
+  "additionalProperties": false,
+  "$defs": {
+    "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$", "description": "Service, template or node identifier." },
+    "absolutePath": { "type": "string", "pattern": "^/", "description": "Absolute Linux path." },
+    "envName": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "Environment variable name; never put its secret value in YAML." },
+    "positiveInteger": { "description": "Positive whole number; quoted digits are accepted for compatibility with yq/Bash.", "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "string", "pattern": "^0*[1-9][0-9]*$" }] },
+    "nonNegativeInteger": { "description": "Non-negative whole number; quoted digits are accepted for compatibility with yq/Bash.", "oneOf": [{ "type": "integer", "minimum": 0 }, { "type": "string", "pattern": "^[0-9]+$" }] },
+    "max86400": { "description": "Positive whole number from 1 through 86400.", "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 86400 }, { "type": "string", "pattern": "^0*(?:[1-9][0-9]{0,3}|[1-7][0-9]{4}|8[0-5][0-9]{3}|86[0-3][0-9]{2}|86400)$" }] },
+    "nonNegativeNumber": { "type": "number", "minimum": 0, "description": "Non-negative numeric threshold." },
+    "port": { "description": "TCP port from 1 through 65535.", "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 65535 }, { "type": "string", "pattern": "^0*(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$" }] },
+    "timeRange": { "type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9]$", "description": "Same-day HH:MM-HH:MM interval; validate also checks that start precedes end." },
+    "days": { "type": "string", "pattern": "^(?:\\*|(?:[Mm][Oo][Nn]|[Tt][Uu][Ee]|[Ww][Ee][Dd]|[Tt][Hh][Uu]|[Ff][Rr][Ii]|[Ss][Aa][Tt]|[Ss][Uu][Nn])(?:,(?:[Mm][Oo][Nn]|[Tt][Uu][Ee]|[Ww][Ee][Dd]|[Tt][Hh][Uu]|[Ff][Rr][Ii]|[Ss][Aa][Tt]|[Ss][Uu][Nn]))*)$", "description": "* or comma-separated three-letter weekdays." },
+    "scalarArg": { "description": "A command argument passed directly as argv, without shell evaluation.", "type": ["string", "integer", "number", "boolean"] },
+    "argv": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/scalarArg" }, "description": "Executable followed by arguments; no shell string or eval." },
+    "commandStep": {
+      "type": "object", "required": ["command"], "description": "A directly executed command with optional working directory and timeout.",
+      "properties": {
+        "command": { "$ref": "#/$defs/argv", "description": "Executable and arguments as an argv array." },
+        "working_directory": { "type": "string", "minLength": 1, "description": "Existing working directory; checked on the host by validate." },
+        "timeout": { "$ref": "#/$defs/positiveInteger", "default": 120, "description": "Maximum command runtime in seconds; defaults to settings.default_action_timeout." }
+      }, "additionalProperties": false
+    },
+    "commandSequence": { "type": "array", "items": { "$ref": "#/$defs/commandStep" }, "description": "Ordered commands, run directly without a shell." },
+    "settings": {
+      "type": "object", "required": ["log_file", "lock_file", "state_directory"],
+      "properties": {
+        "log_file": { "$ref": "#/$defs/absolutePath", "description": "Operational log file." },
+        "lock_file": { "$ref": "#/$defs/absolutePath", "description": "Global non-blocking lock file." },
+        "state_directory": { "$ref": "#/$defs/absolutePath", "description": "Persistent service and incident state directory." },
+        "default_timeout": { "$ref": "#/$defs/positiveInteger", "default": 10, "description": "Default health-check timeout in seconds." },
+        "default_attempts": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 10 }, { "type": "string", "pattern": "^0*(?:[1-9]|10)$" }], "default": 2, "description": "Default number of check attempts." },
+        "default_retry_delay": { "$ref": "#/$defs/nonNegativeInteger", "default": 2, "description": "Delay between check attempts in seconds." },
+        "default_action_timeout": { "$ref": "#/$defs/positiveInteger", "default": 120, "description": "Default timeout for action and hook commands." },
+        "default_action_cooldown": { "$ref": "#/$defs/nonNegativeInteger", "default": 300, "description": "Default seconds between remediation attempts." }
+      }, "additionalProperties": false
+    },
+    "checkFields": {
+      "type": "object", "description": "HTTP, TCP or direct command check. Partial fields are allowed when inherited from a template.",
+      "properties": {
+        "type": { "type": "string", "enum": ["http", "tcp", "command"], "description": "Check transport." },
+        "url": { "type": "string", "pattern": "^https?://\\S+$", "description": "HTTP(S) health endpoint." },
+        "method": { "type": "string", "enum": ["GET", "HEAD"], "default": "GET", "description": "HTTP request method." },
+        "follow_redirects": { "type": "boolean", "default": true, "description": "Follow HTTP redirects." },
+        "success_status": { "type": "array", "minItems": 1, "items": { "oneOf": [{ "type": "integer", "minimum": 100, "maximum": 599 }, { "type": "string", "pattern": "^[1-5][0-9]{2}$" }] }, "description": "Accepted HTTP status codes; defaults to the 2xx range." },
+        "host": { "type": "string", "minLength": 1, "pattern": "^\\S+$", "description": "TCP host name or address." },
+        "port": { "$ref": "#/$defs/port", "description": "TCP destination port." },
+        "commands": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/commandStep" }, "description": "Commands whose exit status determines health." },
+        "timeout": { "$ref": "#/$defs/positiveInteger", "default": 10, "description": "Per-attempt timeout in seconds; defaults to settings.default_timeout." },
+        "attempts": { "$ref": "#/$defs/positiveInteger", "default": 2, "description": "Check attempts; defaults to settings.default_attempts." },
+        "retry_delay": { "$ref": "#/$defs/nonNegativeInteger", "default": 2, "description": "Seconds between attempts; defaults to settings.default_retry_delay." }
+      }, "additionalProperties": false
+    },
+    "check": {
+      "allOf": [
+        { "$ref": "#/$defs/checkFields" },
+        { "required": ["type"] },
+        { "if": { "properties": { "type": { "const": "http" } }, "required": ["type"] }, "then": { "required": ["url"] } },
+        { "if": { "properties": { "type": { "const": "tcp" } }, "required": ["type"] }, "then": { "required": ["host", "port"] } },
+        { "if": { "properties": { "type": { "const": "command" } }, "required": ["type"] }, "then": { "required": ["commands"] } }
+      ], "description": "Complete check definition after template expansion."
+    },
+    "partialHealth": {
+      "type": "object", "properties": {
+        "liveness": { "allOf": [{ "$ref": "#/$defs/checkFields" }, { "properties": { "type": { "const": "http" } } }], "description": "HTTP liveness check; may inherit fields from a template." },
+        "readiness": { "allOf": [{ "$ref": "#/$defs/checkFields" }, { "properties": { "type": { "const": "http" } } }], "description": "HTTP readiness check; may inherit fields from a template." }
+      }, "additionalProperties": false, "description": "Separate liveness and readiness checks."
+    },
+    "health": {
+      "allOf": [{ "$ref": "#/$defs/partialHealth" }, { "required": ["liveness", "readiness"], "properties": {
+        "liveness": { "allOf": [{ "$ref": "#/$defs/check" }, { "properties": { "type": { "const": "http" } } }] },
+        "readiness": { "allOf": [{ "$ref": "#/$defs/check" }, { "properties": { "type": { "const": "http" } } }] }
+      } }], "description": "Both liveness and readiness must be complete HTTP checks."
+    },
+    "backoff": {
+      "type": "object", "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Enable exponential remediation backoff." },
+        "initial_delay": { "$ref": "#/$defs/max86400", "description": "Initial delay in seconds." },
+        "multiplier": { "$ref": "#/$defs/max86400", "description": "Multiplier for each failed attempt." },
+        "max_delay": { "$ref": "#/$defs/max86400", "description": "Maximum delay in seconds; validate also checks that it is not below initial_delay." }
+      }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["initial_delay", "multiplier", "max_delay"] }, "additionalProperties": false
+    },
+    "actions": {
+      "type": "object", "properties": {
+        "commands": { "$ref": "#/$defs/commandSequence", "description": "Remediation commands run in order." },
+        "cooldown": { "$ref": "#/$defs/nonNegativeInteger", "default": 300, "description": "Minimum seconds between remediation attempts; defaults to settings.default_action_cooldown." },
+        "verify_after": { "$ref": "#/$defs/nonNegativeInteger", "default": 0, "description": "Seconds to wait before a post-action readiness check." },
+        "backoff": { "$ref": "#/$defs/backoff", "description": "Exponential retry delay after failed remediation." }
+      }, "additionalProperties": false
+    },
+    "onlyIf": {
+      "type": "object", "required": ["type"], "description": "Condition that gates a service check.",
+      "properties": {
+        "type": { "type": "string", "enum": ["command", "file_exists", "time_window", "load_average", "filesystem"], "description": "Condition kind." },
+        "invert": { "type": "boolean", "default": false, "description": "Invert the condition result." },
+        "command": { "$ref": "#/$defs/argv", "description": "Direct argv command for a command condition." },
+        "timeout": { "$ref": "#/$defs/positiveInteger", "default": 10, "description": "Command condition timeout in seconds." },
+        "exit_code": { "oneOf": [{ "type": "integer", "minimum": 0, "maximum": 255 }, { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0, "maximum": 255 } }], "description": "Expected exit code or set of accepted exit codes." },
+        "path": { "$ref": "#/$defs/absolutePath", "description": "Absolute path for file or filesystem conditions." },
+        "days": { "$ref": "#/$defs/days", "description": "Days when a time-window condition matches." },
+        "time": { "$ref": "#/$defs/timeRange", "description": "Same-day time interval." },
+        "timezone": { "type": "string", "pattern": "^\\S+$", "description": "Installed IANA timezone; validate checks availability." },
+        "max_1min": { "$ref": "#/$defs/nonNegativeNumber", "description": "Maximum 1-minute load average." },
+        "max_5min": { "$ref": "#/$defs/nonNegativeNumber", "description": "Maximum 5-minute load average." },
+        "max_15min": { "$ref": "#/$defs/nonNegativeNumber", "description": "Maximum 15-minute load average." },
+        "min_free_gb": { "$ref": "#/$defs/nonNegativeNumber", "description": "Minimum free disk space in GiB." },
+        "min_free_percent": { "type": "number", "minimum": 0, "maximum": 100, "description": "Minimum free disk percentage." }
+      }, "allOf": [
+        { "if": { "properties": { "type": { "const": "command" } } }, "then": { "required": ["command"] } },
+        { "if": { "properties": { "type": { "const": "file_exists" } } }, "then": { "required": ["path"] } },
+        { "if": { "properties": { "type": { "const": "time_window" } } }, "then": { "required": ["days", "time"] } },
+        { "if": { "properties": { "type": { "const": "load_average" } } }, "then": { "anyOf": [{ "required": ["max_1min"] }, { "required": ["max_5min"] }, { "required": ["max_15min"] }] } },
+        { "if": { "properties": { "type": { "const": "filesystem" } } }, "then": { "required": ["path"], "anyOf": [{ "required": ["min_free_gb"] }, { "required": ["min_free_percent"] }] } }
+      ], "additionalProperties": false
+    },
+    "maintenance": {
+      "type": "object", "required": ["windows"], "description": "Suppress notifications, remediation and hooks during configured windows while checks continue.",
+      "properties": {
+        "timezone": { "type": "string", "pattern": "^(?:$|\\S+)$", "description": "Installed IANA timezone; empty uses the host timezone." },
+        "windows": { "type": "array", "description": "Same-day quiet windows.", "items": { "type": "object", "required": ["days", "time"], "properties": {
+          "name": { "type": "string", "description": "Human-readable window name; defaults to window-N." },
+          "days": { "$ref": "#/$defs/days", "description": "Weekdays or * for every day." },
+          "time": { "$ref": "#/$defs/timeRange", "description": "Same-day quiet hours." }
+        }, "additionalProperties": false } }
+      }, "additionalProperties": false
+    },
+    "flapping": {
+      "type": "object", "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Enable flapping guard." },
+        "window_seconds": { "$ref": "#/$defs/max86400", "description": "Transition counting window." },
+        "threshold": { "$ref": "#/$defs/max86400", "description": "Transitions required to enter flapping state." },
+        "hold_seconds": { "$ref": "#/$defs/max86400", "description": "Minimum remediation hold period." },
+        "recovery_seconds": { "$ref": "#/$defs/max86400", "description": "Stable health period required to leave flapping state." },
+        "notify": { "type": "boolean", "default": true, "description": "Send a flapping notification." }
+      }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["window_seconds", "threshold", "hold_seconds", "recovery_seconds"] }, "additionalProperties": false
+    },
+    "escalationLevel": {
+      "type": "object", "description": "One incident-level escalation threshold, fired once per incident.",
+      "properties": {
+        "after_consecutive_unavailable": { "$ref": "#/$defs/positiveInteger", "description": "Escalate after this many unavailable runs." },
+        "after_duration_seconds": { "$ref": "#/$defs/positiveInteger", "description": "Escalate after this incident duration." },
+        "after_failed_remediations": { "$ref": "#/$defs/positiveInteger", "description": "Escalate after this many failed remediation attempts." },
+        "notify": { "type": "boolean", "default": true, "description": "Send an escalation notification." },
+        "manual_intervention": { "type": "boolean", "default": false, "description": "Block further remediation until manual intervention." }
+      }, "anyOf": [{ "required": ["after_consecutive_unavailable"] }, { "required": ["after_duration_seconds"] }, { "required": ["after_failed_remediations"] }], "additionalProperties": false
+    },
+    "escalation": {
+      "type": "object", "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Enable repeated-failure escalation." },
+        "after_consecutive_unavailable": { "$ref": "#/$defs/positiveInteger", "description": "Escalate after unavailable runs." },
+        "after_duration_seconds": { "$ref": "#/$defs/positiveInteger", "description": "Escalate after incident duration in seconds." },
+        "after_failed_remediations": { "$ref": "#/$defs/positiveInteger", "description": "Escalate after failed remediation attempts." },
+        "levels": { "type": "array", "items": { "$ref": "#/$defs/escalationLevel" }, "description": "Additional escalation stages." },
+        "cooldown": { "$ref": "#/$defs/nonNegativeInteger", "default": 0, "description": "Minimum seconds between escalations." },
+        "notify": { "type": "boolean", "default": true, "description": "Send escalation notification." },
+        "manual_intervention": { "type": "boolean", "default": false, "description": "Block further remediation until manually cleared." },
+        "actions": { "type": "object", "properties": { "commands": { "$ref": "#/$defs/commandSequence", "description": "Escalation commands." } }, "additionalProperties": false },
+        "hooks": { "type": "object", "properties": { "on_escalation": { "$ref": "#/$defs/commandSequence", "description": "Commands invoked on escalation." } }, "additionalProperties": false }
+      }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "anyOf": [{ "required": ["after_consecutive_unavailable"] }, { "required": ["after_duration_seconds"] }, { "required": ["after_failed_remediations"] }, { "properties": { "levels": { "minItems": 1 } }, "required": ["levels"] }] }, "additionalProperties": false
+    },
+    "circuitBreaker": {
+      "type": "object", "required": ["enabled"], "description": "Stop repeated failing remediation until the circuit closes.",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Enable circuit breaker." },
+        "failure_threshold": { "$ref": "#/$defs/positiveInteger", "description": "Failed remediation attempts before opening." },
+        "open_duration": { "$ref": "#/$defs/positiveInteger", "description": "Minimum open duration in seconds." },
+        "half_open_verify_after": { "$ref": "#/$defs/nonNegativeInteger", "default": 0, "description": "Seconds to wait before half-open verification." },
+        "notify": { "type": "boolean", "default": true, "description": "Notify on opening and closing." },
+        "hooks": { "type": "object", "properties": {
+          "on_open": { "$ref": "#/$defs/commandSequence", "description": "Commands invoked when the circuit opens." },
+          "on_close": { "$ref": "#/$defs/commandSequence", "description": "Commands invoked when the circuit closes." }
+        }, "additionalProperties": false }
+      }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["failure_threshold", "open_duration"] }, "additionalProperties": false
+    },
+    "serviceFields": {
+      "type": "object", "description": "Service fields; templates may provide any subset. Template name/template_mode/name entries are ignored by Bash when placed inside a template.",
+      "properties": {
+        "name": { "$ref": "#/$defs/name", "description": "Unique service name; ignored inside templates." },
+        "enabled": { "type": "boolean", "default": true, "description": "Whether this service is checked." },
+        "parallel": { "type": "boolean", "description": "Override the global parallel check setting for this service." },
+        "template": { "$ref": "#/$defs/name", "description": "Reusable template name; ignored inside templates." },
+        "template_mode": { "type": "string", "enum": ["deep", "shallow"], "default": "deep", "description": "How to merge the referenced template; ignored inside templates." },
+        "check": { "$ref": "#/$defs/checkFields", "description": "Health check; may inherit fields from a template." },
+        "health": { "$ref": "#/$defs/partialHealth", "description": "Separate HTTP liveness and readiness checks." },
+        "actions": { "$ref": "#/$defs/actions", "description": "Remediation commands, cooldown, verification and backoff." },
+        "only_if": { "type": "array", "items": { "$ref": "#/$defs/onlyIf" }, "description": "Conditions that must pass before a check runs." },
+        "flapping": { "$ref": "#/$defs/flapping", "description": "Flapping guard." },
+        "maintenance": { "$ref": "#/$defs/maintenance", "description": "Quiet windows for side effects." },
+        "escalation": { "$ref": "#/$defs/escalation", "description": "Repeated-failure escalation." },
+        "circuit_breaker": { "$ref": "#/$defs/circuitBreaker", "description": "Remediation circuit breaker." },
+        "depends_on": { "type": "array", "items": { "type": "object", "required": ["name"], "properties": {
+          "name": { "$ref": "#/$defs/name", "description": "Name of an existing service checked first." },
+          "required": { "type": "boolean", "default": true, "description": "If true, failed dependency blocks this service's check." }
+        }, "additionalProperties": false }, "description": "Ordered service dependencies; cycles are checked by validate." }
+      }, "additionalProperties": false
+    },
+    "service": {
+      "allOf": [
+        { "$ref": "#/$defs/serviceFields" },
+        { "required": ["name"] },
+        { "not": { "required": ["check", "health"] } },
+        { "if": { "not": { "required": ["template"] } }, "then": { "oneOf": [
+          { "required": ["check"], "properties": { "check": { "$ref": "#/$defs/check" } } },
+          { "required": ["health"], "properties": { "health": { "$ref": "#/$defs/health" } } }
+        ] } }
+      ], "description": "A monitored service. A template reference permits partial check fields until the template is merged."
+    },
+    "hooks": { "type": "object", "properties": {
+      "on_failure": { "$ref": "#/$defs/commandSequence", "description": "Commands invoked on a failure transition." },
+      "on_recovery": { "$ref": "#/$defs/commandSequence", "description": "Commands invoked on recovery." }
+    }, "additionalProperties": false },
+    "security": { "type": "object", "properties": {
+      "remediation_policy": { "type": "object", "properties": {
+        "mode": { "type": "string", "enum": ["legacy", "enforce"], "default": "legacy", "description": "Legacy behavior or exact-command allowlist enforcement." },
+        "allowed_commands": { "$ref": "#/$defs/commandSequence", "description": "Exact allowed remediation argv vectors; validate also checks executable safety." }
+      }, "if": { "properties": { "mode": { "const": "enforce" } }, "required": ["mode"] }, "then": { "required": ["allowed_commands"], "properties": { "allowed_commands": { "minItems": 1 } } }, "additionalProperties": false }
+    }, "additionalProperties": false },
+    "parallel": { "type": "object", "properties": {
+      "enabled": { "type": "boolean", "default": false, "description": "Run check phase concurrently." },
+      "max_jobs": { "$ref": "#/$defs/nonNegativeInteger", "default": 0, "description": "Maximum parallel checks; 0 means unlimited." },
+      "timeout": { "$ref": "#/$defs/nonNegativeInteger", "default": 0, "description": "Fallback per-check timeout; 0 disables this limit." },
+      "temp_dir": { "type": "string", "pattern": "^(?:$|/)", "default": "", "description": "Optional absolute temporary directory; empty uses /tmp." }
+    }, "additionalProperties": false },
+    "metrics": { "type": "object", "properties": {
+      "enabled": { "type": "boolean", "default": false, "description": "Write Prometheus textfile metrics." },
+      "textfile_directory": { "$ref": "#/$defs/absolutePath", "description": "node_exporter textfile collector directory." },
+      "filename": { "type": "string", "minLength": 1, "pattern": "^[^/]+$", "description": "Metrics file name, not a path." },
+      "prefix": { "type": "string", "pattern": "^[A-Za-z_:][A-Za-z0-9_:]*$", "description": "Prometheus metric name prefix." },
+      "static_labels": { "type": "object", "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": { "enum": ["service", "check_type"] } }, "additionalProperties": { "type": ["string", "integer", "number", "boolean"] }, "description": "Additional scalar labels; service and check_type are reserved." }
+    }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["textfile_directory", "filename", "prefix"] }, "additionalProperties": false },
+    "statusPage": { "type": "object", "properties": {
+      "enabled": { "type": "boolean", "default": false, "description": "Generate a static status page." },
+      "output_directory": { "$ref": "#/$defs/absolutePath", "description": "Directory for generated page files." },
+      "html_filename": { "type": "string", "pattern": "^[^/]*$", "default": "index.html", "description": "HTML output file name." },
+      "json_filename": { "type": "string", "pattern": "^[^/]*$", "default": "", "description": "Optional JSON output file name; empty disables JSON." },
+      "title": { "type": "string", "default": "Service Status", "description": "Page title." },
+      "description": { "type": "string", "default": "Current availability of monitored services", "description": "Page description." },
+      "logo_url": { "type": "string", "default": "", "description": "Optional logo URL." },
+      "auto_refresh": { "$ref": "#/$defs/nonNegativeInteger", "default": 0, "description": "Browser refresh interval in seconds; 0 disables refresh." },
+      "footer": { "type": "string", "default": "Powered by Watchdog", "description": "Footer text." },
+      "theme": { "type": "object", "properties": {
+        "primary": { "type": "string", "pattern": "^(?:$|[0-9A-Fa-f]{6})$", "default": "2563eb", "description": "Primary RGB hex color without #; empty uses the default." },
+        "danger": { "type": "string", "pattern": "^(?:$|[0-9A-Fa-f]{6})$", "default": "dc2626", "description": "Down RGB hex color without #; empty uses the default." },
+        "warning": { "type": "string", "pattern": "^(?:$|[0-9A-Fa-f]{6})$", "default": "f59e0b", "description": "Warning RGB hex color without #; empty uses the default." },
+        "bg": { "type": "string", "pattern": "^(?:$|[0-9A-Fa-f]{6})$", "default": "f8fafc", "description": "Background RGB hex color without #; empty uses the default." },
+        "card": { "type": "string", "pattern": "^(?:$|[0-9A-Fa-f]{6})$", "default": "ffffff", "description": "Card RGB hex color without #; empty uses the default." },
+        "text": { "type": "string", "pattern": "^(?:$|[0-9A-Fa-f]{6})$", "default": "1e293b", "description": "Text RGB hex color without #; empty uses the default." },
+        "muted": { "type": "string", "pattern": "^(?:$|[0-9A-Fa-f]{6})$", "default": "64748b", "description": "Muted RGB hex color without #; empty uses the default." }
+      }, "additionalProperties": false }
+    }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["output_directory"] }, "additionalProperties": false },
+    "smtp": { "type": "object", "properties": {
+      "url": { "type": "string", "pattern": "^smtps?://\\S+$", "description": "SMTP or SMTPS server URL." },
+      "from": { "type": "string", "pattern": "^[^\\s@]+@[^\\s@]+$", "description": "Single sender address." },
+      "username": { "type": "string", "minLength": 1, "description": "Optional SMTP username." },
+      "password_env": { "$ref": "#/$defs/envName", "description": "Environment variable containing the SMTP password." },
+      "password": { "type": "string", "minLength": 1, "description": "Legacy inline password; prefer password_env and never commit a secret." },
+      "tls_required": { "type": "boolean", "default": true, "description": "Require TLS for SMTP." },
+      "insecure_skip_verify": { "type": "boolean", "default": false, "description": "Skip TLS certificate verification; unsafe outside testing." },
+      "timeout": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 60 }, { "type": "string", "pattern": "^0*(?:[1-9]|[1-5][0-9]|60)$" }], "default": 30, "description": "SMTP connection timeout in seconds." }
+    }, "not": { "required": ["password", "password_env"] }, "additionalProperties": false },
+    "emailMessage": { "type": "object", "required": ["subject", "body"], "properties": {
+      "subject": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n]*$", "description": "Single-line email subject template." },
+      "body": { "type": "string", "minLength": 1, "description": "Email body template." }
+    }, "additionalProperties": false },
+    "webhookTemplate": { "type": "object", "properties": {
+      "failure": { "type": "string", "minLength": 1, "description": "Failure message template." },
+      "recovery": { "type": "string", "minLength": 1, "description": "Recovery message template." },
+      "escalation": { "type": "string", "minLength": 1, "description": "Escalation message template." },
+      "circuit_open": { "type": "string", "minLength": 1, "description": "Circuit-open message template." },
+      "circuit_close": { "type": "string", "minLength": 1, "description": "Circuit-close message template." },
+      "flapping": { "type": "string", "minLength": 1, "description": "Flapping message template." }
+    }, "additionalProperties": false },
+    "notifications": { "type": "object", "properties": {
+      "email": { "type": "object", "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Send failure and recovery email on transitions." },
+        "smtp": { "$ref": "#/$defs/smtp", "description": "SMTP transport settings." },
+        "recipients": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[^\\s@]+@[^\\s@]+$" }, "description": "Recipient addresses." },
+        "failure": { "$ref": "#/$defs/emailMessage", "description": "Failure email templates." },
+        "recovery": { "$ref": "#/$defs/emailMessage", "description": "Recovery email templates." }
+      }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["smtp", "recipients", "failure", "recovery"], "properties": { "smtp": { "required": ["url", "from"] } } }, "additionalProperties": false },
+      "webhooks": { "type": "object", "properties": {
+        "telegram": { "type": "object", "properties": {
+          "enabled": { "type": "boolean", "default": false, "description": "Send Telegram bot messages." },
+          "bot_token_env": { "$ref": "#/$defs/envName", "description": "Environment variable holding the bot token." },
+          "chat_id": { "type": "string", "minLength": 1, "description": "Telegram chat ID." },
+          "thread_id": { "oneOf": [{ "type": "string", "pattern": "^(?:$|[0-9]+)$" }, { "type": "integer", "minimum": 0 }], "description": "Optional numeric forum topic ID." },
+          "template": { "$ref": "#/$defs/webhookTemplate", "description": "Telegram message templates." }
+        }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["bot_token_env", "chat_id"] }, "additionalProperties": false },
+        "discord": { "$ref": "#/$defs/urlWebhook", "description": "Discord webhook settings." },
+        "slack": { "$ref": "#/$defs/urlWebhook", "description": "Slack webhook settings." },
+        "ntfy": { "type": "object", "properties": {
+          "enabled": { "type": "boolean", "default": false, "description": "Send ntfy messages." },
+          "url": { "type": "string", "pattern": "^https?://\\S+$", "description": "ntfy topic URL." },
+          "token_env": { "type": "string", "pattern": "^(?:$|[A-Za-z_][A-Za-z0-9_]*)$", "description": "Optional bearer-token environment variable; empty means no token." },
+          "priority": { "oneOf": [{ "type": "string", "enum": ["min", "low", "default", "high", "urgent", "max", "1", "2", "3", "4", "5"] }, { "type": "integer", "minimum": 1, "maximum": 5 }], "default": "default", "description": "ntfy priority: 1-5, min, low, default, high, urgent or max." },
+          "template": { "$ref": "#/$defs/webhookTemplate", "description": "ntfy message templates." }
+        }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["url"] }, "additionalProperties": false }
+      }, "additionalProperties": false }
+    }, "additionalProperties": false },
+    "urlWebhook": { "type": "object", "properties": {
+      "enabled": { "type": "boolean", "default": false, "description": "Enable this webhook channel." },
+      "webhook_url_env": { "$ref": "#/$defs/envName", "description": "Environment variable holding the webhook URL." },
+      "template": { "$ref": "#/$defs/webhookTemplate", "description": "JSON message templates." }
+    }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["webhook_url_env"] }, "additionalProperties": false },
+    "federationTemplates": { "type": "object", "properties": {
+      "overall_failure": { "$ref": "#/$defs/federationMessage", "description": "Overall failure notification." },
+      "overall_recovery": { "$ref": "#/$defs/federationMessage", "description": "Overall recovery notification." },
+      "agent_offline": { "$ref": "#/$defs/federationMessage", "description": "Offline-agent notification." }
+    }, "additionalProperties": false },
+    "federationMessage": { "type": "object", "properties": {
+      "subject": { "type": "string", "description": "Notification subject template." },
+      "body": { "type": "string", "description": "Notification body template." }
+    }, "additionalProperties": false },
+    "federation": { "type": "object", "properties": {
+      "enabled": { "type": "boolean", "default": false, "description": "Enable agent or hub federation." },
+      "node_id": { "$ref": "#/$defs/name", "description": "Node ID; empty in Bash defaults to hostname -s." },
+      "agent": { "type": "object", "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Send local reports to the hub." },
+        "transport": { "type": "string", "enum": ["http", "file"], "default": "http", "description": "HTTP push or atomic local file report." },
+        "hub_url": { "type": "string", "pattern": "^https?://\\S+$", "description": "Hub HTTP endpoint." },
+        "token_env": { "$ref": "#/$defs/envName", "description": "Environment variable holding hub token." },
+        "timeout": { "$ref": "#/$defs/positiveInteger", "default": 10, "description": "HTTP report timeout in seconds." },
+        "report_path": { "$ref": "#/$defs/absolutePath", "description": "Local path for file transport." },
+        "heartbeat": { "type": "boolean", "default": true, "description": "Report even if state did not change." }
+      }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "if": { "properties": { "transport": { "const": "file" } }, "required": ["transport"] }, "then": { "required": ["report_path"] }, "else": { "required": ["hub_url", "token_env"] } }, "additionalProperties": false },
+      "hub": { "type": "object", "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Aggregate reports from agents." },
+        "incoming_dir": { "$ref": "#/$defs/absolutePath", "description": "Directory receiving agent reports." },
+        "archive_dir": { "$ref": "#/$defs/absolutePath", "description": "Directory for processed reports." },
+        "max_report_age": { "$ref": "#/$defs/positiveInteger", "default": 300, "description": "Seconds until a report is stale." },
+        "archive_retention_days": { "$ref": "#/$defs/nonNegativeInteger", "default": 0, "description": "Days to retain archived reports; 0 disables cleanup." },
+        "expected_nodes": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/name" }, "description": "Node IDs to expect, including offline nodes." },
+        "notify_on": { "type": "object", "properties": {
+          "overall_change": { "type": "boolean", "default": true, "description": "Notify on overall state changes." },
+          "agent_offline": { "type": "boolean", "default": true, "description": "Notify when an agent stops reporting." },
+          "any_service_change": { "type": "boolean", "default": false, "description": "Notify on any service state change." }
+        }, "additionalProperties": false },
+        "templates": { "$ref": "#/$defs/federationTemplates", "description": "Hub notification templates." }
+      }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["incoming_dir", "archive_dir"] }, "additionalProperties": false }
+    }, "allOf": [{ "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "not": { "properties": { "agent": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "hub": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["agent", "hub"] } } }], "additionalProperties": false },
+    "discovery": { "type": "object", "properties": {
+      "enabled": { "type": "boolean", "default": false, "description": "Enable the separately invoked offline generator." },
+      "output_dir": { "type": "string", "pattern": "^(?:$|/)", "default": "", "description": "Output directory; empty writes to stdout." },
+      "output_prefix": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$", "not": { "enum": [".", ".."] }, "default": "auto-", "description": "Prefix for generated discovery YAML file." },
+      "docker_compose": { "type": "object", "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Scan static Docker Compose files." },
+        "sources": { "type": "array", "items": { "type": "string" }, "description": "Compose files or directories." },
+        "only_with_healthcheck": { "type": "boolean", "default": false, "description": "Include only Compose services with a healthcheck." },
+        "skip_labels": { "type": "array", "items": { "type": "string" }, "description": "Compose label filters to skip." },
+        "http_ports": { "type": "array", "items": { "$ref": "#/$defs/port" }, "default": [80, 443, 8080, 3000, 8000, 8081, 8443], "description": "Published ports treated as HTTP(S)." },
+        "default_actions": { "$ref": "#/$defs/actions", "description": "Draft remediation actions for discovered Compose services." }
+      }, "additionalProperties": false },
+      "systemd": { "type": "object", "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Scan static systemd service units." },
+        "sources": { "type": "array", "items": { "type": "string" }, "description": "Unit files, directories or glob patterns." },
+        "only_service_types": { "type": "array", "items": { "type": "string" }, "default": ["simple", "notify", "forking"], "description": "systemd service types to include." },
+        "skip_patterns": { "type": "array", "items": { "type": "string" }, "description": "Unit-name substrings to skip." },
+        "detect_ports": { "type": "boolean", "default": true, "description": "Guess a TCP or HTTP port from ExecStart." },
+        "default_actions": { "$ref": "#/$defs/actions", "description": "Draft remediation actions for discovered units." }
+      }, "additionalProperties": false }
+    }, "additionalProperties": false }
+  }
+}

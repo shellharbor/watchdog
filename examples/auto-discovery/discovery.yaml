@@ -1,0 +1,10 @@
+# Run from the repository root: bash ./watchdog-discover.sh -c ./examples/auto-discovery/discovery.yaml --dry-run
+discovery:
+  enabled: true
+  docker_compose:
+    enabled: true
+    sources: [./examples/auto-discovery/compose.yml]
+    http_ports: [8080, 3000]
+  systemd:
+    enabled: true
+    sources: [./examples/auto-discovery/app.service]

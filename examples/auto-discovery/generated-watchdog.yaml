@@ -1,0 +1,21 @@
+# Illustrative draft generated from discovery.yaml. Review before merging.
+services:
+  - name: 'auto-discovery-web'
+    check:
+      type: http
+      url: 'http://localhost:8080'
+      timeout: 10
+      attempts: 3
+  - name: 'auto-discovery-db'
+    check:
+      type: tcp
+      host: localhost
+      port: 5432
+      timeout: 10
+      attempts: 3
+  - name: 'app'
+    check:
+      type: http
+      url: 'http://localhost:3000'
+      timeout: 10
+      attempts: 3

@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+
+      - name: Install yq v4
+        env:
+          YQ_VERSION: v4.47.2
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          sudo chmod +x /usr/local/bin/yq
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install CI-only schema validator
+        run: python -m pip install 'jsonschema>=4.19,<5'
+
+      - name: Check Bash syntax
+        run: bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/smoke.sh tests/email-notifications.sh tests/discovery.sh tests/notify-test.sh tests/status-command.sh tests/schema.sh
+
+      - name: Run ShellCheck
+        run: shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/smoke.sh tests/email-notifications.sh tests/discovery.sh tests/notify-test.sh tests/status-command.sh tests/schema.sh
+
+      - name: Check configuration JSON Schema
+        run: bash ./tests/schema.sh
+
+      - name: Run smoke test
+        run: bash ./tests/smoke.sh
+
+      - name: Test email notifications
+        run: bash ./tests/email-notifications.sh
+
+      - name: Test manual notifications
+        run: bash ./tests/notify-test.sh
+
+      - name: Test read-only terminal status
+        run: bash ./tests/status-command.sh
+
+  discovery:
+    name: Offline discovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install yq v4
+        env:
+          YQ_VERSION: v4.47.2
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Run offline discovery regression tests
+        run: bash ./tests/discovery.sh
