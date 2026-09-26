@@ -19,6 +19,9 @@ target stays unavailable after all retry attempts.
 The watchdog is intentionally a one-shot program. Run it from a systemd timer,
 cron, or another scheduler.
 
+For task-oriented guides and additional runnable examples, see the
+[project Wiki](wiki/Home.md).
+
 ## Features
 
 - HTTP/HTTPS checks with redirects, timeouts, retries, and expected statuses

@@ -86,7 +86,14 @@ release/
 *.tgz
 *.zip
 
-.ai
-.codex
+.ai/
+.codex/
+.cursor/
+scripts/
+.windsurfrules
 AGENTS.md
+AI_CONTEXT.md
 CLAUDE.md
+GEMINI.md
+KIMI.md
+MANUS.md
