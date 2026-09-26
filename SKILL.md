@@ -26,6 +26,10 @@ projects.
 - An HTTP `expect.max_total_ms` breach is a `degraded` latency signal: preserve
   its transition alert and metrics, but never route it into remediation,
   circuit-breaker, backoff, flapping, or unavailable-counter handling.
+- `tls_cert` is an optional OpenSSL-backed leaf-certificate expiry check. It
+  must verify `openssl` only when enabled, pass host and SNI as separate argv
+  values, and expose expiry context without logging or persisting certificate
+  contents.
 - `--dry-run` may perform checks but must not persist state/history/metrics or
   send notifications, run actions, or run hooks. `validate`, `status`,
   `--report`, and `--trend` must not run checks. `status`, reports, and trends

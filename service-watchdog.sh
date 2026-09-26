@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Universal one-shot watchdog for HTTP, TCP, command, disk, and security checks.
+# Universal one-shot watchdog for HTTP, TCP, command, disk, TLS certificate, and security checks.
 # Requires Bash >= 4.3, curl, yq v4, flock, and GNU timeout/coreutils.
 
 set -uo pipefail
@@ -1362,6 +1362,27 @@ validate_check_definition() {
             (( threshold_count > 0 )) ||
                 die "${description} needs min_free_gb or min_free_percent."
             ;;
+        tls_cert)
+            validate_string "${expression}.host" "${description}.host"
+            value="$(yaml_read "${expression}.host")"
+            [[ -n "$value" && "$value" != *[[:space:]]* ]] || die "${description}.host must not be empty or contain spaces."
+            port="$(yaml_read "${expression}.port // 443")"
+            if ! is_positive_integer "$port" || (( 10#$port > 65535 )); then
+                die "${description}.port must be from 1 through 65535."
+            fi
+            value_type="$(yaml_read "${expression}.server_name | type")"
+            if [[ "$value_type" != '!!null' ]]; then
+                validate_string "${expression}.server_name" "${description}.server_name"
+                value="$(yaml_read "${expression}.server_name")"
+                [[ -n "$value" && "$value" != *[[:space:]]* ]] || die "${description}.server_name must not be empty or contain spaces."
+            fi
+            value_type="$(yaml_read "${expression}.min_days_remaining | type")"
+            [[ "$value_type" == '!!int' ]] || die "${description}.min_days_remaining must be a non-negative integer."
+            value="$(yaml_read "${expression}.min_days_remaining")"
+            is_non_negative_integer "$value" || die "${description}.min_days_remaining must be a non-negative integer."
+            (( 10#$value <= 36500 )) || die "${description}.min_days_remaining must not exceed 36500."
+            command -v openssl >/dev/null 2>&1 || die "${description}.type=tls_cert requires openssl in PATH."
+            ;;
         clamav)
             validate_string "${expression}.path" "${description}.path"
             value="$(yaml_read "${expression}.path")"
@@ -1380,7 +1401,7 @@ validate_check_definition() {
             case "$value" in '>'|'>='|'<'|'<='|'=='|'!=') ;; *) die "${description}.comparator must be >, >=, <, <=, ==, or !=." ;; esac
             validate_threshold_source "${expression}.source" "${description}.source"
             ;;
-        *) die "${description}.type must be http, tcp, command, disk, clamav, or threshold." ;;
+        *) die "${description}.type must be http, tcp, command, disk, tls_cert, clamav, or threshold." ;;
     esac
     for field in timeout attempts retry_delay; do
         case "$field" in
@@ -2540,6 +2561,51 @@ check_disk() {
     return 0
 }
 
+check_tls_cert() {
+    local host port server_name timeout_value min_days_remaining expiration_output expires_at expires_epoch now_epoch remaining_seconds days_remaining
+    host="$(yaml_read "${CHECK_CONFIG_PATH}.host")"
+    port="$(yaml_read "${CHECK_CONFIG_PATH}.port // 443")"
+    server_name="$(yaml_read "${CHECK_CONFIG_PATH}.server_name // \"\"")"
+    [[ -n "$server_name" ]] || server_name="$host"
+    timeout_value="$(yaml_read "${CHECK_CONFIG_PATH}.timeout // ${DEFAULT_TIMEOUT}")"
+    min_days_remaining="$(yaml_read "${CHECK_CONFIG_PATH}.min_days_remaining")"
+    CHECK_HTTP_STATUS=''
+    CHECK_EXIT_CODE=1
+
+    if ! expiration_output="$(
+        timeout --signal=TERM --kill-after=2s "$timeout_value" \
+            openssl s_client -connect "${host}:${port}" -servername "$server_name" </dev/null 2>/dev/null |
+            openssl x509 -noout -enddate 2>/dev/null
+    )"; then
+        CHECK_DETAIL="tls_cert host=${host} port=${port} server_name=${server_name} reason=certificate-unavailable"
+        return 1
+    fi
+    [[ "$expiration_output" == notAfter=* ]] || {
+        CHECK_DETAIL="tls_cert host=${host} port=${port} server_name=${server_name} reason=invalid-expiry"
+        return 1
+    }
+    expires_at="${expiration_output#notAfter=}"
+    expires_epoch="$(LC_ALL=C date -u -d "$expires_at" '+%s' 2>/dev/null)"
+    if ! is_non_negative_integer "$expires_epoch"; then
+        CHECK_DETAIL="tls_cert host=${host} port=${port} server_name=${server_name} reason=invalid-expiry"
+        return 1
+    fi
+    now_epoch="$(date '+%s')"
+    remaining_seconds=$((10#$expires_epoch - 10#$now_epoch))
+    if (( remaining_seconds <= 0 )); then
+        CHECK_DETAIL="tls_cert host=${host} port=${port} server_name=${server_name} expires_at=${expires_at} days_remaining=0 min_days_remaining=${min_days_remaining} reason=expired"
+        return 1
+    fi
+    days_remaining=$((remaining_seconds / 86400))
+    CHECK_DETAIL="tls_cert host=${host} port=${port} server_name=${server_name} expires_at=${expires_at} days_remaining=${days_remaining} min_days_remaining=${min_days_remaining}"
+    if (( days_remaining < 10#$min_days_remaining )); then
+        CHECK_DETAIL="certificate expiring soon; ${CHECK_DETAIL}"
+        return 1
+    fi
+    CHECK_EXIT_CODE=0
+    return 0
+}
+
 security_check_log() {
     local level="$1" message="$2"
     if (( PARALLEL_CHECK_MODE == 1 )); then
@@ -2729,6 +2795,7 @@ perform_single_check() {
         tcp) check_tcp "$index" ;;
         command) check_command "$index" ;;
         disk) check_disk ;;
+        tls_cert) check_tls_cert ;;
         clamav) run_check_clamav ;;
         threshold) run_check_threshold ;;
         *) return 1 ;;

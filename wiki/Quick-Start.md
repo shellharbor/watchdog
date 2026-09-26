@@ -1,7 +1,7 @@
 # Quick Start
 
 This guide brings up one HTTP check safely. The same flow applies to TCP,
-command, disk, and security checks.
+command, disk, TLS certificate, and security checks.
 
 ## 1. Install prerequisites
 
@@ -16,6 +16,9 @@ yq --version  # Must say Mike Farah yq version v4.x.x
 
 The Python package called `yq` is not compatible. Install Mike Farah's
 release through your distribution or its official instructions.
+
+Install `openssl` only if your configuration uses `check.type: tls_cert`.
+`validate` identifies that missing optional dependency before any checks run.
 
 Clone the project, or download a release from GitHub:
 

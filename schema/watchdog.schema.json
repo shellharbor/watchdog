@@ -83,17 +83,19 @@
       "additionalProperties": false
     },
     "checkFields": {
-      "type": "object", "description": "HTTP, TCP, direct command, disk-space or security check. Partial fields are allowed when inherited from a template.",
+      "type": "object", "description": "HTTP, TCP, direct command, disk-space, TLS certificate, or security check. Partial fields are allowed when inherited from a template.",
       "properties": {
-        "type": { "type": "string", "enum": ["http", "tcp", "command", "disk", "clamav", "threshold"], "description": "Check transport, filesystem, antivirus, or threshold source." },
+        "type": { "type": "string", "enum": ["http", "tcp", "command", "disk", "tls_cert", "clamav", "threshold"], "description": "Check transport, filesystem, TLS certificate expiry, antivirus, or threshold source." },
         "url": { "type": "string", "pattern": "^https?://\\S+$", "description": "HTTP(S) health endpoint." },
         "method": { "type": "string", "enum": ["GET", "HEAD"], "default": "GET", "description": "HTTP request method." },
         "follow_redirects": { "type": "boolean", "default": true, "description": "Follow HTTP redirects." },
         "success_status": { "type": "array", "minItems": 1, "items": { "oneOf": [{ "type": "integer", "minimum": 100, "maximum": 599 }, { "type": "string", "pattern": "^[1-5][0-9]{2}$" }] }, "description": "Accepted HTTP status codes; defaults to the 2xx range." },
         "headers": { "type": "array", "items": { "$ref": "#/$defs/httpHeader" }, "description": "Additional HTTP request headers. Use value_env for secrets." },
         "expect": { "$ref": "#/$defs/httpExpect", "description": "Optional HTTP response assertions and latency SLO." },
-        "host": { "type": "string", "minLength": 1, "pattern": "^\\S+$", "description": "TCP host name or address." },
-        "port": { "$ref": "#/$defs/port", "description": "TCP destination port." },
+        "host": { "type": "string", "minLength": 1, "pattern": "^\\S+$", "description": "TCP or TLS host name or address." },
+        "port": { "$ref": "#/$defs/port", "description": "TCP destination port, or TLS port (defaults to 443 for tls_cert)." },
+        "server_name": { "type": "string", "minLength": 1, "pattern": "^\\S+$", "description": "TLS SNI server name; defaults to host." },
+        "min_days_remaining": { "type": "integer", "minimum": 0, "maximum": 36500, "description": "Minimum whole days remaining before the TLS leaf certificate expires." },
         "commands": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/commandStep" }, "description": "Commands whose exit status determines health." },
         "path": { "$ref": "#/$defs/absolutePath", "description": "Absolute file or directory path on the filesystem to measure with df." },
         "min_free_gb": { "$ref": "#/$defs/nonNegativeNumber", "description": "Minimum available space in GiB; disk check fails below this threshold." },
@@ -135,6 +137,7 @@
         { "if": { "properties": { "type": { "const": "tcp" } }, "required": ["type"] }, "then": { "required": ["host", "port"] } },
         { "if": { "properties": { "type": { "const": "command" } }, "required": ["type"] }, "then": { "required": ["commands"] } },
         { "if": { "properties": { "type": { "const": "disk" } }, "required": ["type"] }, "then": { "required": ["path"], "anyOf": [{ "required": ["min_free_gb"] }, { "required": ["min_free_percent"] }] } },
+        { "if": { "properties": { "type": { "const": "tls_cert" } }, "required": ["type"] }, "then": { "required": ["host", "min_days_remaining"] } },
         { "if": { "properties": { "type": { "const": "clamav" } }, "required": ["type"] }, "then": { "required": ["path"] } },
         { "if": { "properties": { "type": { "const": "threshold" } }, "required": ["type"] }, "then": { "required": ["source", "threshold"] } }
       ], "description": "Complete check definition after template expansion."

@@ -37,6 +37,7 @@ For task-oriented guides and additional runnable examples, see the
 - TCP port checks using Bash `/dev/tcp`
 - Arbitrary command checks
 - Opt-in disk-space checks with free GiB and percentage thresholds
+- Opt-in TLS certificate expiry checks with SNI support and remaining-day thresholds
 - Opt-in ClamAV and event-count threshold checks for security monitoring
 - Ordered remediation commands without `eval`
 - Per-service action cooldown
@@ -59,6 +60,7 @@ For task-oriented guides and additional runnable examples, see the
 - [Mike Farah `yq` v4](https://github.com/mikefarah/yq)
 - `curl`, `flock`, GNU `timeout`/coreutils (including `base64`), and `unzip`
   for ZIP installation
+- `openssl` only when one or more services use `check.type: tls_cert`
 
 On Debian or Ubuntu, install the system packages with:
 
@@ -78,14 +80,14 @@ yq --version  # Must report Mike Farah yq version v4.x.x
 
 ## Quick start
 
-Download the stable `v1.3.0` source archive from GitHub:
+Download the stable `v1.4.0` source archive from GitHub:
 
 ```bash
 curl -fL \
-  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.3.0.zip \
+  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.4.0.zip \
   -o watchdog.zip
 unzip watchdog.zip
-cd watchdog-1.3.0
+cd watchdog-1.4.0
 ```
 
 Alternatively, clone the repository with Git:
@@ -295,6 +297,35 @@ check does not run remediation unless you explicitly configure
 failure alert and one recovery alert through every enabled email/webhook
 channel; maintenance windows still suppress delivery. See
 [`examples/disk-space.yaml`](examples/disk-space.yaml) for all five channels.
+
+#### TLS certificate expiry
+
+Use `type: tls_cert` to alert before the leaf certificate presented by a TLS
+endpoint expires. `host` and `min_days_remaining` are required; `port` defaults
+to `443`, and `server_name` defaults to `host` and is sent as TLS SNI.
+
+```yaml
+services:
+  - name: public-api-tls
+    check:
+      type: tls_cert
+      host: api.example.com
+      server_name: api.example.com
+      min_days_remaining: 21
+      timeout: 10
+      attempts: 1
+```
+
+The check needs `openssl` only when it is enabled. It records the expiry time
+and whole `days_remaining` in the regular check detail, which is available to
+notifications, hooks, history, and the operational log. A certificate that is
+already expired always fails, including when `min_days_remaining: 0`.
+
+`tls_cert` intentionally monitors the presented leaf certificate's expiration,
+not its chain or hostname trust. Pair it with an HTTPS `http` check when endpoint
+availability and normal CA/hostname verification are also required. See
+[`examples/tls-certificate.yaml`](examples/tls-certificate.yaml) for a complete
+schema-annotated configuration.
 
 #### Security monitoring
 
@@ -559,7 +590,8 @@ Available template variables:
 - `{{service}}`: service name from `services[].name`;
 - `{{event}}`: `failure` or `recovery`;
 - `{{timestamp}}`: local date, time, and UTC offset at message creation;
-- `{{check_type}}`: `http`, `tcp`, or `command`;
+- `{{check_type}}`: the configured type, such as `http`, `tcp`, `command`,
+  `disk`, `tls_cert`, `clamav`, or `threshold`;
 - `{{detail}}`: diagnostic message from the most recent check;
 - `{{http_status}}`: HTTP response code, or `n/a` for another check type;
 - `{{check_exit}}`: check command exit code, or `n/a` when unavailable;
@@ -1507,6 +1539,9 @@ package; CI installs both and also compiles every Bash source with the official
 `bash:4.3.48` container to protect the documented compatibility floor.
 `tests/smart-http.sh` covers secret headers, content
 assertions, latency degradation, no-remediation behavior, and metric output.
+`tests/tls-certificate.sh` covers SNI and port handling, expiry thresholds,
+missing optional dependencies, dry runs, invalid configuration, and the absence
+of certificate data in operational logs.
 
 ## License
 

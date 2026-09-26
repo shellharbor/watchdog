@@ -3,7 +3,7 @@
 Each service has either one `check` or HTTP `health.liveness` and
 `health.readiness` checks. A check can retry before it is considered failed.
 The available `check.type` values are `http`, `tcp`, `command`, `disk`,
-`clamav`, and `threshold`.
+`tls_cert`, `clamav`, and `threshold`.
 
 ## HTTP and HTTPS
 
@@ -140,6 +140,38 @@ disk warning follows the same failure/recovery lifecycle as an HTTP service.
 See [`examples/disk-space.yaml`](../examples/disk-space.yaml) for a complete
 all-channel example.
 
+## TLS certificate expiry
+
+The `tls_cert` check retrieves the leaf certificate presented by a TLS endpoint
+and fails when it has fewer than `min_days_remaining` whole days remaining.
+`host` and `min_days_remaining` are required. `port` defaults to `443`, while
+`server_name` defaults to `host` and is supplied as TLS SNI.
+
+```yaml
+services:
+  - name: public-api-tls
+    check:
+      type: tls_cert
+      host: api.example.com
+      port: 443
+      server_name: api.example.com
+      min_days_remaining: 21
+      timeout: 10
+      attempts: 1
+```
+
+Install `openssl` only on hosts that enable this check; `validate` reports an
+actionable error when it is missing. Watchdog records the expiry timestamp and
+`days_remaining` in ordinary check detail, so regular failure/recovery alerts,
+hooks, history, and logs include the useful operator context without persisting
+the certificate itself. An already expired certificate always fails, including
+with `min_days_remaining: 0`.
+
+This is an expiry monitor, not a chain or hostname-trust validator. Add an HTTPS
+`http` check when you also need normal curl CA and hostname verification. See
+[`examples/tls-certificate.yaml`](../examples/tls-certificate.yaml) for the
+complete file.
+
 ## ClamAV scan
 
 The `clamav` check invokes `clamscan`. It is optional: `validate` reports a
@@ -254,6 +286,7 @@ and bounded by a timeout.
 | Only a socket must be reachable | `tcp` |
 | A local program already knows health | `command` |
 | A filesystem is close to full | `disk` |
+| A TLS certificate is nearing expiry | `tls_cert` |
 | Scan a local file tree for malware | `clamav` |
 | Alert on a count of events or connections | `threshold` |
 

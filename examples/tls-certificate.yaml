@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+# TLS certificate expiry monitoring. `openssl` is required only for this check.
+settings:
+  log_file: /var/log/service-watchdog/service-watchdog.log
+  lock_file: /run/lock/service-watchdog.lock
+  state_directory: /var/lib/service-watchdog
+  default_attempts: 1
+  default_retry_delay: 0
+
+services:
+  - name: public-api-tls
+    check:
+      type: tls_cert
+      host: api.example.com
+      # 443 is the default; use port for a non-standard TLS endpoint.
+      port: 443
+      # server_name is sent as TLS SNI and defaults to host.
+      server_name: api.example.com
+      min_days_remaining: 21
+      timeout: 10

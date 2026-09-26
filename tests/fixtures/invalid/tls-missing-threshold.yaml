@@ -1,0 +1,9 @@
+settings:
+  log_file: /tmp/watchdog-schema-test.log
+  lock_file: /tmp/watchdog-schema-test.lock
+  state_directory: /tmp/watchdog-schema-test-state
+services:
+  - name: broken-tls
+    check:
+      type: tls_cert
+      host: api.example.test

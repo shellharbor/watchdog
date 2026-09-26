@@ -7,6 +7,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-26
+
+### Added
+
+- Opt-in `tls_cert` checks that alert when a TLS leaf certificate has fewer
+  than the configured whole days remaining before expiry. They support a
+  custom port and SNI name, reuse normal transition notifications, and report
+  the expiry timestamp and `days_remaining` without persisting certificate data.
+- A schema-annotated TLS certificate example, negative schema coverage, and
+  deterministic OpenSSL-shim regression tests.
+
 ## [1.3.0] - 2026-09-26
 
 ### Added
@@ -150,7 +161,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Quick Start now uses the stable `v1.0.3` source archive.
 - Expanded repository ignore rules and troubleshooting documentation.
 
-[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/shellharbor/watchdog/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/shellharbor/watchdog/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/shellharbor/watchdog/compare/v1.1.8...v1.2.0
 [1.1.8]: https://github.com/shellharbor/watchdog/compare/v1.1.7...v1.1.8

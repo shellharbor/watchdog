@@ -30,7 +30,7 @@ and threshold before scheduling a production run.
 
 - [Quick Start](Quick-Start.md) — install, validate, run, and schedule a first check.
 - [Configuration Reference](Configuration-Reference.md) — settings, templates, conditions, and safe command syntax.
-- [Checks and Security Monitoring](Checks-and-Security.md) — HTTP, TCP, commands, disk capacity, ClamAV, and event thresholds.
+- [Checks and Security Monitoring](Checks-and-Security.md) — HTTP, TCP, commands, disk capacity, TLS certificate expiry, ClamAV, and event thresholds.
 - [Notifications and Remediation](Notifications-and-Remediation.md) — email, Telegram, Discord, Slack, ntfy, hooks, and recovery actions.
 - [Reliability and Dependencies](Reliability-and-Dependencies.md) — retries, cooldowns, backoff, flapping, maintenance, escalation, circuit breakers, dependencies, and parallel checks.
 - [Operations, Status, and History](Operations-CLI-and-History.md) — `status`, `notify-test`, history, reports, trends, metrics, and status pages.
@@ -136,6 +136,7 @@ The [`examples/`](../examples) directory contains complete starting points for
 [Docker Compose](../examples/http-docker-compose.yaml),
 [systemd TCP checks](../examples/tcp-systemd.yaml),
 [disk thresholds](../examples/disk-space.yaml),
+[TLS certificate expiry](../examples/tls-certificate.yaml),
 [security monitoring](../examples/security-monitoring.yaml),
 [notification delivery tests](../examples/notify-test.yaml), and more.
 Validate a copied example before relying on it: illustrative paths and service

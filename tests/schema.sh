@@ -73,6 +73,7 @@ expected_fields = {
     "security-threshold-comparator": "services[0].check.comparator",
     "security-threshold-source": "services[0].check.source.type",
     "tcp-port": "services[0].check.port",
+    "tls-missing-threshold": "services[0].check",
 }
 for path in invalid_paths:
     if not schema_errors(path):

@@ -29,6 +29,7 @@ readonly TEST_SCRIPTS=(
     status-command.sh
     status-page.sh
     templates.sh
+    tls-certificate.sh
     versioning.sh
     webhooks.sh
 )

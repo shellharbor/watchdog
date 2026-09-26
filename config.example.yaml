@@ -291,6 +291,18 @@ templates:
       verify_after: 2
 
 services:
+  # TLS certificate expiry monitoring uses the optional openssl command. It
+  # checks the leaf certificate presented by the TLS endpoint; use an HTTP
+  # check as well when endpoint availability or certificate trust is required.
+  # - name: public-api-tls
+  #   check:
+  #     type: tls_cert
+  #     host: api.example.com
+  #     port: 443
+  #     server_name: api.example.com
+  #     min_days_remaining: 21
+  #     attempts: 1
+
   # Security check examples (uncomment only after installing the optional
   # tools and replacing the paths with readable locations on this host):
   # - name: upload-scan
