@@ -23,7 +23,9 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 ### Fixed
 
 - Restored cache matching for dotted configuration paths and numeric array
-  indexes, preventing ordinary reads from unnecessarily falling back to `yq`.
+  indexes, and preserved empty cache fields while loading maps and sequences.
+  Ordinary reads no longer fall back to `yq` or mistake configured services for
+  an empty list.
 
 ## [1.4.0] - 2026-09-26
 

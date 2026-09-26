@@ -269,8 +269,7 @@ yaml_cache_value() {
     (( $# >= 2 )) && has_default=1
     tag="${YAML_CACHE_TAG[$path]:-}"
     encoded="${YAML_CACHE_VALUE[$path]:-}"
-    if [[ -z "$tag" || "$tag" == '!!null' ||
-        ( "$tag" == '!!bool' && "$encoded" == 'ZmFsc2U=' ) ]]; then
+    if [[ -z "$tag" || "$tag" == '!!null' ]]; then
         if (( has_default == 1 )); then
             printf '%s' "$default_value"
         else
@@ -278,8 +277,13 @@ yaml_cache_value() {
         fi
         return 0
     fi
+    if [[ "$tag" == '!!bool' && "$encoded" == 'b:ZmFsc2U=' && $has_default == 1 ]]; then
+        printf '%s' "$default_value"
+        return 0
+    fi
     [[ "$tag" != '!!map' && "$tag" != '!!seq' ]] || return 1
-    printf '%s' "$encoded" | base64 --decode
+    [[ "$encoded" == b:* ]] || return 1
+    printf '%s' "${encoded#b:}" | base64 --decode
 }
 
 yaml_cache_length() {
@@ -290,7 +294,7 @@ yaml_cache_length() {
     tag="${YAML_CACHE_TAG[$path]:-}"
     encoded="${YAML_CACHE_VALUE[$path]:-}"
     if [[ -z "$tag" || "$tag" == '!!null' ||
-        ( "$tag" == '!!bool' && "$encoded" == 'ZmFsc2U=' ) ]]; then
+        ( "$tag" == '!!bool' && "$encoded" == 'b:ZmFsc2U=' ) ]]; then
         (( has_default == 1 )) || { printf '0'; return 0; }
         value="$(yaml_cache_literal "$default_value")" || return 1
         case "$value" in
@@ -391,7 +395,7 @@ yaml_read_cached() {
 load_yaml_cache() {
     local cache_output cache_path cache_tag cache_value cache_length parent_path key
     # shellcheck disable=SC2016 # $node is evaluated by yq, not this shell.
-    local cache_expression='.. | . as $node | [(path | map(tostring) | join("/")), ($node | tag), (($node | select(tag != "!!map" and tag != "!!seq") | tostring | @base64) // ""), ($node | length | tostring)] | @tsv'
+    local cache_expression='.. | . as $node | [(path | map(tostring) | join("/")), ($node | tag), (($node | select(tag != "!!map" and tag != "!!seq") | tostring | @base64 | "b:" + .) // "n:"), ($node | length | tostring)] | @tsv'
 
     YAML_CACHE_ACTIVE=0
     YAML_CACHE_TAG=()
