@@ -3,7 +3,6 @@
 ![Watchdog Hero Banner](https://i.postimg.cc/4ykZzvhr/watchdog-hero-site-monitoring.jpg)
 
 [![CI](https://github.com/shellharbor/watchdog/actions/workflows/ci.yml/badge.svg)](https://github.com/shellharbor/watchdog/actions/workflows/ci.yml)
-[![Discovery tests](https://img.shields.io/github/check-runs/shellharbor/watchdog/main?nameFilter=Offline%20discovery&label=discovery%20tests&style=flat)](https://github.com/shellharbor/watchdog/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/shellharbor/watchdog/actions/workflows/codeql.yml/badge.svg)](https://github.com/shellharbor/watchdog/actions/workflows/codeql.yml)
 [![GitHub release](https://img.shields.io/github/v/release/shellharbor/watchdog)](https://github.com/shellharbor/watchdog/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -21,6 +20,15 @@ cron, or another scheduler.
 
 For task-oriented guides and additional runnable examples, see the
 [project Wiki](wiki/Home.md).
+
+## Community and project policies
+
+- [Contributing guide](CONTRIBUTING.md) — development workflow and quality checks
+- [Security policy](SECURITY.md) — private vulnerability reporting and secure deployment
+- [Code of Conduct](CODE_OF_CONDUCT.md) — community standards and enforcement
+- [Support guide](SUPPORT.md) — documentation, issues, and safe troubleshooting
+- [Release guide](RELEASING.md) — verified version and release workflow
+- [Changelog](CHANGELOG.md) — user-visible release history
 
 ## Features
 
@@ -69,14 +77,14 @@ yq --version  # Must report Mike Farah yq version v4.x.x
 
 ## Quick start
 
-Download the stable `v1.0.6` source archive from GitHub:
+Download the stable `v1.1.8` source archive from GitHub:
 
 ```bash
 curl -fL \
-  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.0.6.zip \
+  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.1.8.zip \
   -o watchdog.zip
 unzip watchdog.zip
-cd watchdog-1.0.6
+cd watchdog-1.1.8
 ```
 
 Alternatively, clone the repository with Git:
@@ -91,6 +99,7 @@ Install and configure the watchdog:
 ```bash
 sudo install -d -m 0755 /opt/service-watchdog
 sudo install -m 0755 service-watchdog.sh /opt/service-watchdog/
+sudo install -m 0644 VERSION /opt/service-watchdog/
 sudo install -m 0640 config.example.yaml /opt/service-watchdog/config.yaml
 sudoedit /opt/service-watchdog/config.yaml
 sudo /opt/service-watchdog/service-watchdog.sh -n
@@ -100,6 +109,14 @@ sudo /opt/service-watchdog/service-watchdog.sh
 Or run `sudo ./install.sh` to verify dependencies, install the script and
 example configuration, create runtime directories, install the systemd units,
 and reload systemd. The installer preserves an existing configuration.
+
+### Version and release metadata
+
+[`VERSION`](VERSION) is the source of the release version. The CLI reads it
+from the same directory as `service-watchdog.sh`; install or copy both files
+together. The `Release metadata` GitHub Actions workflow verifies that a pushed
+`vX.Y.Z` tag, `VERSION`, `--version`, the stable source archive in this README,
+and the matching changelog entry agree.
 
 To test the development branch instead, clone the repository as shown above or
 download [`main.zip`](https://github.com/shellharbor/watchdog/archive/refs/heads/main.zip).
@@ -1437,33 +1454,17 @@ enforce after reviewing actions.
 ## Testing
 
 ```bash
-bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/smoke.sh tests/discovery.sh tests/disk-space.sh tests/history.sh tests/security.sh tests/notify-test.sh tests/status-command.sh tests/schema.sh
-bash -n tests/email-notifications.sh tests/webhooks.sh tests/maintenance.sh tests/escalation.sh tests/prometheus.sh tests/dependencies.sh tests/circuit-breaker.sh tests/status-page.sh tests/federation.sh tests/reliability.sh tests/health-policy.sh
+bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
 shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
-bash ./tests/schema.sh    # CI installs Python jsonschema; yq v4 is also required
-bash ./tests/disk-space.sh
-bash ./tests/history.sh
-bash ./tests/security.sh
-bash ./tests/discovery.sh
-bash ./tests/notify-test.sh
-bash ./tests/status-command.sh
-bash ./tests/smoke.sh
-bash ./tests/email-notifications.sh
-bash ./tests/webhooks.sh
-bash ./tests/maintenance.sh
-bash ./tests/escalation.sh
-bash ./tests/prometheus.sh
-bash ./tests/dependencies.sh
-bash ./tests/circuit-breaker.sh
-bash ./tests/status-page.sh
-bash ./tests/federation.sh
-bash ./tests/reliability.sh
-bash ./tests/health-policy.sh
+bash ./tests/versioning.sh
+bash ./tests/run-all.sh
 ```
 
-The smoke test starts a local HTTP server and verifies both the healthy path and
-the remediation path. GitHub Actions runs discovery regressions as a separate
-`Offline discovery` check on pushes and pull requests.
+`tests/run-all.sh` is the authoritative regression inventory. It fails if a
+new test script is not registered, then runs every listed scenario in a
+deterministic order. GitHub Actions runs this same suite on pushes and pull
+requests. The schema test requires Mike Farah `yq` v4 and Python's `jsonschema`
+package; CI installs both.
 
 ## License
 
@@ -1474,4 +1475,4 @@ MIT
 [Igor Sazonov](https://github.com/shellharbor) —
 [sovletig@gmail.com](mailto:sovletig@gmail.com)
 
-Project repository: [github.com/shellharbor/watchdog](https://github.com/tigusigalpa/watchdog)
+Project repository: [github.com/shellharbor/watchdog](https://github.com/shellharbor/watchdog)

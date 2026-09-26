@@ -62,7 +62,8 @@ exec "$WATCHDOG_TEST_REAL_CURL" "$@"
 CURL
 chmod 0755 "${TEST_DIRECTORY}/bin/curl"
 
-export WATCHDOG_TEST_REAL_CURL="$(command -v curl)"
+WATCHDOG_TEST_REAL_CURL="$(command -v curl)"
+export WATCHDOG_TEST_REAL_CURL
 export WATCHDOG_TEST_TELEGRAM_ARGS="${TEST_DIRECTORY}/telegram.args"
 export PATH="${TEST_DIRECTORY}/bin:${PATH}"
 export WATCHDOG_TG_BOT_TOKEN='test-token'

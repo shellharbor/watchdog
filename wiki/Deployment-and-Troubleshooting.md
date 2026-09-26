@@ -103,14 +103,16 @@ regression tests. Run the narrowest relevant test first, then broader coverage:
 ```bash
 bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
 shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
-bash ./tests/schema.sh
-for test_file in tests/*.sh; do bash "$test_file"; done
+bash ./tests/versioning.sh
+bash ./tests/run-all.sh
 ```
 
-`tests/schema.sh` needs Mike Farah `yq` v4 and Python's `jsonschema` package.
-The test suite isolates external programs through PATH shims and temporary
-directories; follow that pattern when adding a new check, notification channel,
-or command. GitHub Actions runs the relevant checks on pushes and pull requests.
+`tests/run-all.sh` is the authoritative inventory and fails if a test script is
+not registered before running every scenario. `tests/schema.sh` needs Mike
+Farah `yq` v4 and Python's `jsonschema` package. The suite isolates external
+programs through PATH shims and temporary directories; follow that pattern when
+adding a new check, notification channel, or command. GitHub Actions runs this
+same suite on pushes and pull requests.
 
 ## Get help with useful evidence
 

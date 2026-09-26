@@ -1,0 +1,25 @@
+name: Release metadata
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify version, CLI, documentation, and tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\r\n' < VERSION)"
+          [[ "${GITHUB_REF_NAME}" == "v${version}" ]]
+          [[ "$(bash ./service-watchdog.sh --version)" == "service-watchdog.sh ${version}" ]]
+          grep -F "/refs/tags/v${version}.zip" README.md >/dev/null
+          grep -F "watchdog-${version}" README.md >/dev/null
+          grep -F "## [${version}]" CHANGELOG.md >/dev/null

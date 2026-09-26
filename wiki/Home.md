@@ -12,6 +12,17 @@ This Wiki is a task-oriented companion to the complete
 root-owned configuration and adapt every host name, path, command, recipient,
 and threshold before scheduling a production run.
 
+## Project community
+
+- [Contributing](../CONTRIBUTING.md) explains the focused, test-first workflow.
+- [Security](../SECURITY.md) provides a private vulnerability-reporting path and
+  secure deployment checklist.
+- [Support](../SUPPORT.md) helps distinguish configuration questions, bugs, and
+  security reports without exposing production secrets.
+- [Code of Conduct](../CODE_OF_CONDUCT.md) defines a respectful collaboration
+  standard for issues, pull requests, and other project spaces.
+- [Releasing](../RELEASING.md) documents the version/tag verification process.
+
 ## Start here
 
 - [Quick Start](Quick-Start.md) — install, validate, run, and schedule a first check.

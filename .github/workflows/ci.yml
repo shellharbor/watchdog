@@ -34,49 +34,10 @@ jobs:
         run: python -m pip install 'jsonschema>=4.19,<5'
 
       - name: Check Bash syntax
-        run: bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/smoke.sh tests/email-notifications.sh tests/discovery.sh tests/disk-space.sh tests/history.sh tests/security.sh tests/notify-test.sh tests/status-command.sh tests/schema.sh
+        run: bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
 
       - name: Run ShellCheck
-        run: shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/smoke.sh tests/email-notifications.sh tests/discovery.sh tests/disk-space.sh tests/history.sh tests/security.sh tests/notify-test.sh tests/status-command.sh tests/schema.sh
+        run: shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
 
-      - name: Check configuration JSON Schema
-        run: bash ./tests/schema.sh
-
-      - name: Run smoke test
-        run: bash ./tests/smoke.sh
-
-      - name: Test disk-space alerts
-        run: bash ./tests/disk-space.sh
-
-      - name: Test history and trends
-        run: bash ./tests/history.sh
-
-      - name: Test security checks
-        run: bash ./tests/security.sh
-
-      - name: Test email notifications
-        run: bash ./tests/email-notifications.sh
-
-      - name: Test manual notifications
-        run: bash ./tests/notify-test.sh
-
-      - name: Test read-only terminal status
-        run: bash ./tests/status-command.sh
-
-  discovery:
-    name: Offline discovery
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install yq v4
-        env:
-          YQ_VERSION: v4.47.2
-        run: |
-          sudo wget -qO /usr/local/bin/yq \
-            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
-          sudo chmod +x /usr/local/bin/yq
-
-      - name: Run offline discovery regression tests
-        run: bash ./tests/discovery.sh
+      - name: Run full regression suite
+        run: bash ./tests/run-all.sh

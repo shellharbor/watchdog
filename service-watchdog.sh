@@ -8,7 +8,12 @@ IFS=$'\n\t'
 readonly SCRIPT_NAME="${0##*/}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
-readonly WATCHDOG_VERSION="1.0.6"
+WATCHDOG_VERSION="unknown"
+if [[ -r "${SCRIPT_DIR}/VERSION" ]]; then
+    IFS= read -r WATCHDOG_VERSION <"${SCRIPT_DIR}/VERSION" || true
+    WATCHDOG_VERSION="${WATCHDOG_VERSION%$'\r'}"
+fi
+readonly WATCHDOG_VERSION
 
 CONFIG_FILE="${WATCHDOG_CONFIG:-${SCRIPT_DIR}/config.yaml}"
 ONLY_SERVICE=""

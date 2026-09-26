@@ -27,6 +27,11 @@ if (( BASH_VERSINFO[0] < 4 ||
     exit 1
 fi
 
+[[ -r "${SOURCE_DIR}/VERSION" ]] || {
+    printf 'Required release metadata is missing: %s/VERSION\n' "$SOURCE_DIR" >&2
+    exit 1
+}
+
 missing_dependency=0
 for command_name in base64 curl flock install systemctl timeout yq; do
     require_command "$command_name" || missing_dependency=1
@@ -47,6 +52,7 @@ install -d -m 0750 "$LOG_DIR" "$STATE_DIR"
 install -d -m 0755 /run/lock
 install -m 0755 "${SOURCE_DIR}/service-watchdog.sh" "${INSTALL_DIR}/service-watchdog.sh"
 install -m 0755 "${SOURCE_DIR}/watchdog-discover.sh" "${INSTALL_DIR}/watchdog-discover.sh"
+install -m 0644 "${SOURCE_DIR}/VERSION" "${INSTALL_DIR}/VERSION"
 
 if [[ ! -e "${CONFIG_DIR}/config.yaml" ]]; then
     install -m 0640 "${SOURCE_DIR}/config.example.yaml" "${CONFIG_DIR}/config.yaml"
