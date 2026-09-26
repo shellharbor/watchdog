@@ -80,6 +80,19 @@ federation:
         subject: "[FEDERATION] Agent {{node_id}} is offline"
         body: "Agent {{node_id}} has not reported for {{age_seconds}} seconds."
 
+# Optional per-check history. JSONL needs no extra dependency; for SQLite,
+# change storage to sqlite and path to /var/lib/service-watchdog/history.db.
+history:
+  enabled: false
+  storage: jsonl
+  path: /var/lib/service-watchdog/history
+  rotation:
+    mode: daily
+    max_age_days: 30
+    max_records: 0
+  reports:
+    trend_dots: 60
+
 # Optional Prometheus node_exporter textfile collector integration.
 metrics:
   enabled: false
@@ -269,6 +282,24 @@ templates:
       verify_after: 2
 
 services:
+  # Security check examples (uncomment only after installing the optional
+  # tools and replacing the paths with readable locations on this host):
+  # - name: upload-scan
+  #   check: {type: clamav, path: /var/www/uploads, recursive: true, timeout: 300}
+  # - name: ssh-bruteforce
+  #   check:
+  #     type: threshold
+  #     source: {type: journald, unit: sshd, since: "5 minutes ago", pattern: "Failed password"}
+  #     threshold: 10
+  #     comparator: ">"
+  # - name: syn-flood
+  #   check: {type: threshold, source: {type: netstat, state: SYN-RECV}, threshold: 500}
+  # - name: nginx-flood
+  #   check:
+  #     type: threshold
+  #     source: {type: logfile, path: /var/log/nginx/access.log, pattern: " 444 ", tail_lines: 10000}
+  #     threshold: 1000
+
   - name: example-website
     template: default_http
     # Set false to keep this individual check out of a parallel batch.

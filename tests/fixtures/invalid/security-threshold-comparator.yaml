@@ -1,0 +1,13 @@
+settings:
+  log_file: /tmp/watchdog-security-invalid.log
+  lock_file: /tmp/watchdog-security-invalid.lock
+  state_directory: /tmp/watchdog-security-invalid-state
+services:
+  - name: ssh-bruteforce
+    check:
+      type: threshold
+      source:
+        type: command
+        command: [/bin/true]
+      threshold: 10
+      comparator: dangerous

@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+# Replace paths, units and alert addresses before enabling scheduled runs.
+# clamscan, journalctl and ss/netstat are optional tools checked by validate.
+settings:
+  log_file: /var/log/service-watchdog/security.log
+  lock_file: /run/lock/service-watchdog-security.lock
+  state_directory: /var/lib/service-watchdog/security
+  default_attempts: 1
+  default_retry_delay: 0
+
+parallel:
+  enabled: true
+  max_jobs: 2
+  timeout: 300
+
+# Channels are global in the current Watchdog configuration. Add other
+# enabled webhook channels under notifications.webhooks as needed.
+notifications:
+  email:
+    enabled: true
+    smtp:
+      url: smtps://smtp.example.com:465
+      from: watchdog@example.com
+      username: watchdog@example.com
+      password_env: WATCHDOG_SMTP_PASSWORD
+    recipients: [security@example.com]
+    failure:
+      subject: "[SECURITY] {{service}} alert on {{node_id}}"
+      body: "{{detail}}\nCount: {{match_count}}; threshold: {{threshold}} {{comparator}}; since: {{since}}"
+    recovery:
+      subject: "[SECURITY] {{service}} recovered"
+      body: "Security check is healthy again: {{service}}"
+
+services:
+  - name: upload-scan
+    parallel: false
+    check:
+      type: clamav
+      path: /var/www/uploads
+      recursive: true
+      timeout: 300
+      attempts: 1
+
+  - name: ssh-bruteforce
+    check:
+      type: threshold
+      source:
+        type: journald
+        unit: sshd
+        since: "5 minutes ago"
+        pattern: "Failed password"
+      threshold: 10
+      comparator: ">"
+      attempts: 1
+
+  - name: syn-flood
+    check:
+      type: threshold
+      source:
+        type: netstat
+        state: SYN-RECV
+      threshold: 500
+      comparator: ">"
+      attempts: 1
+
+  - name: nginx-444-flood
+    check:
+      type: threshold
+      source:
+        type: logfile
+        path: /var/log/nginx/access.log
+        pattern: " 444 "
+        tail_lines: 10000
+      threshold: 1000
+      comparator: ">"
+      attempts: 1

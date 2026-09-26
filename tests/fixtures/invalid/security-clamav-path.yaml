@@ -1,0 +1,9 @@
+settings:
+  log_file: /tmp/watchdog-security-invalid.log
+  lock_file: /tmp/watchdog-security-invalid.lock
+  state_directory: /tmp/watchdog-security-invalid-state
+services:
+  - name: upload-scan
+    check:
+      type: clamav
+      path: relative/uploads

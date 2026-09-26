@@ -1,0 +1,13 @@
+settings:
+  log_file: /tmp/watchdog-history-invalid.log
+  lock_file: /tmp/watchdog-history-invalid.lock
+  state_directory: /tmp/watchdog-history-invalid-state
+history:
+  enabled: true
+  path: relative/history
+services:
+  - name: api
+    check:
+      type: command
+      commands:
+        - command: [/bin/true]

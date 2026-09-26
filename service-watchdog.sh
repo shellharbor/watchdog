@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Universal one-shot watchdog for HTTP endpoints, TCP ports, and commands.
+# Universal one-shot watchdog for HTTP, TCP, command, disk, and security checks.
 # Requires Bash >= 4.3, curl, yq v4, flock, and GNU timeout/coreutils.
 
 set -uo pipefail
@@ -22,6 +22,8 @@ NOTIFY_TEST_MODE=0
 NOTIFY_TEST_CHANNEL=all
 NOTIFY_TEST_EVENT=failure
 NOTIFY_TEST_DETAIL=""
+HISTORY_COMMAND=""
+HISTORY_ARGUMENT=""
 
 LOG_FILE=""
 LOCK_FILE=""
@@ -38,9 +40,17 @@ DEFAULT_ACTION_COOLDOWN=300
 CHECK_DETAIL=""
 CHECK_HTTP_STATUS=""
 CHECK_EXIT_CODE=""
+MATCH_COUNT=""
+THRESHOLD_VALUE=""
+THRESHOLD_COMPARATOR=""
+THRESHOLD_SINCE=""
 CURRENT_SERVICE=""
 CURRENT_CHECK_TYPE=""
 CHECK_CONFIG_PATH=""
+FILESYSTEM_TOTAL_BYTES=0
+FILESYSTEM_FREE_BYTES=0
+FILESYSTEM_FREE_PERCENT=""
+FILESYSTEM_FREE_GB=""
 CURRENT_ACTION_STATUS="not-attempted"
 INCIDENT_ID=""
 INCIDENT_DURATION=0
@@ -82,6 +92,31 @@ PARALLEL_TEMP_BASE=""
 PARALLEL_CHECK_MODE=0
 PARALLEL_ATTEMPTS_MADE=0
 PROCESS_RESULT="unknown"
+HISTORY_ENABLED=0
+HISTORY_STORAGE=jsonl
+HISTORY_PATH=""
+HISTORY_ROTATION_MODE=daily
+HISTORY_MAX_AGE_DAYS=30
+HISTORY_MAX_RECORDS=0
+HISTORY_TREND_DOTS=60
+HISTORY_NODE_ID=""
+HISTORY_FIELDS=()
+HISTORY_SERVICES=()
+declare -A HISTORY_TIMESTAMP=()
+declare -A HISTORY_STATE=()
+declare -A HISTORY_CHECK_TYPE=()
+declare -A HISTORY_DETAIL=()
+declare -A HISTORY_HTTP_STATUS=()
+declare -A HISTORY_CHECK_EXIT=()
+declare -A HISTORY_ACTION_STATUS=()
+declare -A HISTORY_DURATION=()
+declare -A HISTORY_CHECKED=()
+declare -A HISTORY_CHECK_DURATION=()
+declare -A PRELOADED_CHECK_DURATION=()
+declare -A PRELOADED_MATCH_COUNT=()
+declare -A PRELOADED_THRESHOLD_VALUE=()
+declare -A PRELOADED_THRESHOLD_COMPARATOR=()
+declare -A PRELOADED_THRESHOLD_SINCE=()
 declare -A SERVICE_INDEX=()
 declare -A DEPENDENCY_NAMES=()
 declare -A DEPENDENCY_REQUIRED=()
@@ -124,6 +159,8 @@ Usage:
   ${SCRIPT_NAME} validate -c /path/to/config.yaml
   ${SCRIPT_NAME} notify-test [-c FILE] [-s SERVICE] [--channel email|telegram|discord|slack|ntfy|all] [--event failure|recovery|escalation]
   ${SCRIPT_NAME} status [-c FILE] [-s SERVICE] [--json] [--all]
+  ${SCRIPT_NAME} --report daily|weekly|monthly [-c FILE]
+  ${SCRIPT_NAME} --trend SERVICE [-c FILE]
   ${SCRIPT_NAME} -V | --version
 
 Options:
@@ -180,7 +217,7 @@ require_command() {
 }
 
 yaml_read() {
-    if [[ "$COMMAND_MODE" == status && -n "$STATUS_CONFIG_CONTENT" ]]; then
+    if [[ "$COMMAND_MODE" == status || "$COMMAND_MODE" == history ]] && [[ -n "$STATUS_CONFIG_CONTENT" ]]; then
         printf '%s\n' "$STATUS_CONFIG_CONTENT" | yq eval -r "$1" -
     else
         yq eval -r "$1" "$CONFIG_FILE"
@@ -328,6 +365,68 @@ is_non_negative_integer() {
 
 is_non_negative_number() {
     [[ "$1" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]
+}
+
+history_validate_config() {
+    local section_type value value_type count index field ancestor default_value
+    local -A seen=()
+    section_type="$(yaml_read '.history | type')"
+    [[ "$section_type" == '!!null' || "$section_type" == '!!map' ]] || die 'history must be a map.'
+    value="$(yaml_read '.history.enabled // false')"
+    [[ "$value" == true || "$value" == false ]] || die 'history.enabled must be true or false.'
+    [[ "$value" == true ]] && HISTORY_ENABLED=1
+    HISTORY_STORAGE="$(yaml_read '.history.storage // "jsonl"')"
+    [[ "$HISTORY_STORAGE" == jsonl || "$HISTORY_STORAGE" == sqlite ]] || die 'history.storage must be jsonl or sqlite.'
+    HISTORY_PATH="$(yaml_read '.history.path // ""')"
+    if [[ -z "$HISTORY_PATH" ]]; then
+        if [[ "$HISTORY_STORAGE" == jsonl ]]; then HISTORY_PATH="${STATE_DIRECTORY}/history"; else HISTORY_PATH="${STATE_DIRECTORY}/history.db"; fi
+    fi
+    [[ "$HISTORY_PATH" == /* ]] || die 'history.path must be an absolute path.'
+    HISTORY_ROTATION_MODE="$(yaml_read '.history.rotation.mode // "daily"')"
+    [[ "$HISTORY_ROTATION_MODE" == daily || "$HISTORY_ROTATION_MODE" == single ]] || die 'history.rotation.mode must be daily or single.'
+    for field in max_age_days max_records; do
+        if [[ "$field" == max_age_days ]]; then default_value=30; else default_value=0; fi
+        value="$(yaml_read ".history.rotation.${field} // ${default_value}")"
+        is_non_negative_integer "$value" || die "history.rotation.${field} must be a non-negative integer."
+        if [[ "$field" == max_age_days ]]; then HISTORY_MAX_AGE_DAYS="$((10#$value))"; else HISTORY_MAX_RECORDS="$((10#$value))"; fi
+    done
+    value="$(yaml_read '.history.reports.trend_dots // 60')"
+    is_positive_integer "$value" || die 'history.reports.trend_dots must be a positive integer.'
+    (( 10#$value <= 1000 )) || die 'history.reports.trend_dots must not exceed 1000.'
+    HISTORY_TREND_DOTS="$((10#$value))"
+    value_type="$(yaml_read '.history.fields | type')"
+    if [[ "$value_type" != '!!null' ]]; then
+        [[ "$value_type" == '!!seq' ]] || die 'history.fields must be an array.'
+        count="$(yaml_read '.history.fields | length')"
+        (( count > 0 )) || die 'history.fields must not be empty.'
+        HISTORY_FIELDS=()
+        for ((index = 0; index < count; index++)); do
+            field="$(yaml_read ".history.fields[$index]")"
+            case "$field" in timestamp|node_id|service|state|check_type|detail|http_status|check_exit|action_status|duration_sec) ;; *) die "history.fields[$index] is not a supported field." ;; esac
+            [[ -z "${seen[$field]:-}" ]] || die "history.fields[$index] duplicates ${field}."
+            seen["$field"]=1
+            HISTORY_FIELDS+=("$field")
+        done
+        for field in timestamp service state; do [[ -n "${seen[$field]:-}" ]] || die "history.fields must include ${field} for reports."; done
+    else
+        HISTORY_FIELDS=(timestamp node_id service state check_type detail http_status check_exit action_status duration_sec)
+    fi
+    if (( HISTORY_ENABLED == 1 )) || [[ "$COMMAND_MODE" == history ]]; then
+        if [[ "$HISTORY_STORAGE" == sqlite ]]; then
+            command -v sqlite3 >/dev/null 2>&1 || die 'history.storage=sqlite requires sqlite3 in PATH.'
+            [[ ! -d "$HISTORY_PATH" ]] || die 'history.path must be a SQLite database file, not a directory.'
+            ancestor="$(dirname -- "$HISTORY_PATH")"
+        else
+            [[ ! -e "$HISTORY_PATH" || -d "$HISTORY_PATH" ]] || die 'history.path must be a directory for jsonl.'
+            ancestor="$HISTORY_PATH"
+        fi
+        if [[ "$COMMAND_MODE" == history || "$COMMAND_MODE" == status ]]; then
+            [[ ! -e "$HISTORY_PATH" || -r "$HISTORY_PATH" ]] || die 'history.path cannot be read.'
+        else
+            while [[ ! -e "$ancestor" ]]; do ancestor="$(dirname -- "$ancestor")"; done
+            [[ -d "$ancestor" && -w "$ancestor" ]] || die 'history.path cannot be created or written.'
+        fi
+    fi
 }
 
 validate_string() {
@@ -1078,8 +1177,68 @@ build_dependency_graph() {
     done
 }
 
+validate_threshold_source() {
+    local expression="$1" description="$2" source_type value value_type index count item_type pattern_status
+    [[ "$(yaml_read "${expression} | type")" == '!!map' ]] || die "${description} must be a map."
+    validate_string "${expression}.type" "${description}.type"
+    source_type="$(yaml_read "${expression}.type")"
+    case "$source_type" in
+        journald)
+            for value in unit since pattern; do
+                validate_string "${expression}.${value}" "${description}.${value}"
+                [[ -n "$(yaml_read "${expression}.${value}")" ]] || die "${description}.${value} must not be empty."
+            done
+            command -v journalctl >/dev/null 2>&1 || die "${description}.type=journald requires journalctl in PATH."
+            ;;
+        logfile)
+            validate_string "${expression}.path" "${description}.path"
+            value="$(yaml_read "${expression}.path")"
+            [[ "$value" == /* ]] || die "${description}.path must be absolute."
+            [[ -f "$value" && -r "$value" ]] || die "${description}.path must be a readable file."
+            validate_string "${expression}.pattern" "${description}.pattern"
+            value="$(yaml_read "${expression}.tail_lines // 10000")"
+            is_positive_integer "$value" || die "${description}.tail_lines must be a positive integer."
+            (( 10#$value <= 1000000 )) || die "${description}.tail_lines must not exceed 1000000."
+            ;;
+        netstat)
+            value_type="$(yaml_read "${expression}.state | type")"
+            if [[ "$value_type" == '!!null' ]]; then
+                validate_string "${expression}.pattern" "${description}.pattern"
+                [[ -n "$(yaml_read "${expression}.pattern")" ]] || die "${description}.pattern must not be empty."
+            else
+                validate_string "${expression}.state" "${description}.state"
+                value="$(yaml_read "${expression}.state")"
+                [[ "$value" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]] || die "${description}.state has an invalid socket state."
+                [[ "$(yaml_read "${expression}.pattern | type")" == '!!null' ]] || die "${description} must set either state or pattern, not both."
+            fi
+            { command -v ss >/dev/null 2>&1 || command -v netstat >/dev/null 2>&1; } || die "${description}.type=netstat requires ss or netstat in PATH."
+            ;;
+        command)
+            [[ "$(yaml_read "${expression}.command | type")" == '!!seq' ]] || die "${description}.command must be an argv array."
+            count="$(yaml_read "${expression}.command | length")"
+            (( count > 0 )) || die "${description}.command must not be empty."
+            for ((index = 0; index < count; index++)); do
+                item_type="$(yaml_read "${expression}.command[$index] | type")"
+                case "$item_type" in '!!str'|'!!int'|'!!float'|'!!bool') ;; *) die "${description}.command[$index] must be scalar." ;; esac
+            done
+            value="$(yaml_read "${expression}.timeout // ${DEFAULT_TIMEOUT}")"
+            is_positive_integer "$value" || die "${description}.timeout must be a positive integer."
+            ;;
+        *) die "${description}.type must be journald, logfile, netstat, or command." ;;
+    esac
+    value_type="$(yaml_read "${expression}.pattern | type")"
+    if [[ "$value_type" != '!!null' ]]; then
+        validate_string "${expression}.pattern" "${description}.pattern"
+        value="$(yaml_read "${expression}.pattern")"
+        [[ -n "$value" ]] || die "${description}.pattern must not be empty."
+        printf '' | grep -E -- "$value" >/dev/null 2>&1
+        pattern_status=$?
+        (( pattern_status <= 1 )) || die "${description}.pattern is not a valid extended regular expression."
+    fi
+}
+
 validate_check_definition() {
-    local expression="$1" description="$2" check_type value value_type status_count status_index status_code port field
+    local expression="$1" description="$2" check_type value value_type status_count status_index status_code port field threshold_count=0
     validate_string "${expression}.type" "${description}.type"
     check_type="$(yaml_read "${expression}.type")"
     case "$check_type" in
@@ -1116,11 +1275,51 @@ validate_check_definition() {
         command)
             validate_command_sequence "${expression}.commands" "${description}.commands"
             ;;
-        *) die "${description}.type must be http, tcp, or command." ;;
+        disk)
+            validate_string "${expression}.path" "${description}.path"
+            value="$(yaml_read "${expression}.path")"
+            [[ "$value" == /* ]] || die "${description}.path must be absolute."
+            for field in min_free_gb min_free_percent; do
+                value_type="$(yaml_read "${expression}.${field} | type")"
+                [[ "$value_type" == '!!null' ]] && continue
+                [[ "$value_type" == '!!int' || "$value_type" == '!!float' ]] ||
+                    die "${description}.${field} must be a number."
+                value="$(yaml_read "${expression}.${field}")"
+                is_non_negative_number "$value" || die "${description}.${field} must be non-negative."
+                if [[ "$field" == min_free_percent ]] &&
+                    ! LC_ALL=C awk -v threshold="$value" 'BEGIN { exit !(threshold <= 100) }'; then
+                    die "${description}.min_free_percent must not exceed 100."
+                fi
+                threshold_count=$((threshold_count + 1))
+            done
+            (( threshold_count > 0 )) ||
+                die "${description} needs min_free_gb or min_free_percent."
+            ;;
+        clamav)
+            validate_string "${expression}.path" "${description}.path"
+            value="$(yaml_read "${expression}.path")"
+            [[ "$value" == /* ]] || die "${description}.path must be absolute."
+            [[ -e "$value" && -r "$value" ]] || die "${description}.path must exist and be readable."
+            value="$(yaml_read "${expression}.recursive // false")"
+            [[ "$value" == true || "$value" == false ]] || die "${description}.recursive must be true or false."
+            command -v clamscan >/dev/null 2>&1 || die "${description}.type=clamav requires clamscan in PATH."
+            ;;
+        threshold)
+            value_type="$(yaml_read "${expression}.threshold | type")"
+            [[ "$value_type" == '!!int' || "$value_type" == '!!float' ]] || die "${description}.threshold must be a number."
+            value="$(yaml_read "${expression}.threshold")"
+            is_non_negative_number "$value" || die "${description}.threshold must be non-negative."
+            value="$(yaml_read "${expression}.comparator // \">\"")"
+            case "$value" in '>'|'>='|'<'|'<='|'=='|'!=') ;; *) die "${description}.comparator must be >, >=, <, <=, ==, or !=." ;; esac
+            validate_threshold_source "${expression}.source" "${description}.source"
+            ;;
+        *) die "${description}.type must be http, tcp, command, disk, clamav, or threshold." ;;
     esac
     for field in timeout attempts retry_delay; do
         case "$field" in
-            timeout) value="$(yaml_read "${expression}.timeout // ${DEFAULT_TIMEOUT}")" ;;
+            timeout)
+                if [[ "$check_type" == clamav ]]; then value="$(yaml_read "${expression}.timeout // 300")"; else value="$(yaml_read "${expression}.timeout // ${DEFAULT_TIMEOUT}")"; fi
+                ;;
             attempts) value="$(yaml_read "${expression}.attempts // ${DEFAULT_ATTEMPTS}")" ;;
             retry_delay) value="$(yaml_read "${expression}.retry_delay // ${DEFAULT_RETRY_DELAY}")" ;;
         esac
@@ -1459,11 +1658,27 @@ condition_expected_exit_description() {
     printf '[%s]' "$result"
 }
 
+read_filesystem_usage() {
+    local path="$1" timeout_value="${2:-$DEFAULT_TIMEOUT}" df_values total_bytes free_bytes
+    df_values="$(LC_ALL=C timeout --signal=TERM --kill-after=2s "$timeout_value" \
+        df -B1 --output=size,avail -- "$path" 2>/dev/null |
+        LC_ALL=C awk 'NR == 2 { print $1, $2 }')" || return 1
+    IFS=' ' read -r total_bytes free_bytes <<<"$df_values"
+    [[ "$total_bytes" =~ ^[0-9]+$ && "$free_bytes" =~ ^[0-9]+$ ]] || return 1
+    (( 10#$total_bytes > 0 && 10#$free_bytes <= 10#$total_bytes )) || return 1
+    FILESYSTEM_TOTAL_BYTES="$total_bytes"
+    FILESYSTEM_FREE_BYTES="$free_bytes"
+    FILESYSTEM_FREE_PERCENT="$(LC_ALL=C awk -v free="$free_bytes" -v total="$total_bytes" \
+        'BEGIN { printf "%.2f", free * 100 / total }')"
+    FILESYSTEM_FREE_GB="$(LC_ALL=C awk -v free="$free_bytes" \
+        'BEGIN { printf "%.2f", free / 1073741824 }')"
+}
+
 evaluate_single_condition() {
     local index="$1" condition="$2" type raw_result=1 timeout_value command_status formatted
     local path days time timezone day now start end normalized_day matched_day
     local load_1 load_5 load_15 field threshold current value_type
-    local free_bytes free_percent df_values min_free_gb min_free_percent
+    local min_free_gb min_free_percent
     local -a condition_command=() condition_days=()
 
     CONDITION_DETAIL=""
@@ -1539,9 +1754,7 @@ evaluate_single_condition() {
             ;;
         filesystem)
             path="$(yaml_read ".services[$index].only_if[$condition].path")"
-            df_values="$(df -B1 --output=avail,pcent -- "$path" 2>/dev/null | awk 'NR == 2 { gsub(/%/, "", $2); print $1, $2 }')"
-            read -r free_bytes free_percent <<<"$df_values"
-            if ! [[ "$free_bytes" =~ ^[0-9]+$ && "$free_percent" =~ ^[0-9]+$ ]]; then
+            if ! read_filesystem_usage "$path" "$DEFAULT_TIMEOUT"; then
                 CONDITION_ERROR=1
                 CONDITION_DETAIL="filesystem path=${path} reason=unavailable"
                 apply_condition_invert "$index" "$condition" "$raw_result"
@@ -1551,20 +1764,22 @@ evaluate_single_condition() {
             value_type="$(yaml_read ".services[$index].only_if[$condition].min_free_gb | type")"
             if [[ "$value_type" != "!!null" ]]; then
                 min_free_gb="$(yaml_read ".services[$index].only_if[$condition].min_free_gb")"
-                if ! awk -v bytes="$free_bytes" -v minimum="$min_free_gb" 'BEGIN { exit !(bytes >= minimum * 1024 * 1024 * 1024) }'; then
+                if ! LC_ALL=C awk -v bytes="$FILESYSTEM_FREE_BYTES" -v minimum="$min_free_gb" \
+                    'BEGIN { exit !(bytes >= minimum * 1073741824) }'; then
                     raw_result=1
-                    CONDITION_DETAIL="filesystem path=${path} min_free_gb=${min_free_gb} current_free_gb=$(awk -v bytes="$free_bytes" 'BEGIN { printf "%.2f", bytes / 1024 / 1024 / 1024 }')"
+                    CONDITION_DETAIL="filesystem path=${path} min_free_gb=${min_free_gb} current_free_gb=${FILESYSTEM_FREE_GB}"
                 fi
             fi
             value_type="$(yaml_read ".services[$index].only_if[$condition].min_free_percent | type")"
             if [[ "$value_type" != "!!null" ]] && (( raw_result == 0 )); then
                 min_free_percent="$(yaml_read ".services[$index].only_if[$condition].min_free_percent")"
-                if ! awk -v percent="$free_percent" -v minimum="$min_free_percent" 'BEGIN { exit !(percent >= minimum) }'; then
+                if ! LC_ALL=C awk -v free="$FILESYSTEM_FREE_BYTES" -v total="$FILESYSTEM_TOTAL_BYTES" \
+                    -v minimum="$min_free_percent" 'BEGIN { exit !(free * 100 / total >= minimum) }'; then
                     raw_result=1
-                    CONDITION_DETAIL="filesystem path=${path} min_free_percent=${min_free_percent} current_free_percent=${free_percent}"
+                    CONDITION_DETAIL="filesystem path=${path} min_free_percent=${min_free_percent} current_free_percent=${FILESYSTEM_FREE_PERCENT}"
                 fi
             fi
-            [[ -n "$CONDITION_DETAIL" ]] || CONDITION_DETAIL="filesystem path=${path} current_free_percent=${free_percent}"
+            [[ -n "$CONDITION_DETAIL" ]] || CONDITION_DETAIL="filesystem path=${path} current_free_percent=${FILESYSTEM_FREE_PERCENT}"
             ;;
         *)
             CONDITION_ERROR=1
@@ -1597,14 +1812,21 @@ render_email_template() {
     local template="$1"
     local event="$2"
     local timestamp="$3"
-    local detail
+    local detail node_id
     detail="$(sanitize_detail "$CHECK_DETAIL")"
+    node_id="$(yaml_read '.federation.node_id // ""')"
+    [[ -n "$node_id" ]] || node_id="$(hostname -s)"
 
     template="${template//\{\{service\}\}/$CURRENT_SERVICE}"
     template="${template//\{\{event\}\}/$event}"
     template="${template//\{\{timestamp\}\}/$timestamp}"
     template="${template//\{\{check_type\}\}/$CURRENT_CHECK_TYPE}"
     template="${template//\{\{detail\}\}/$detail}"
+    template="${template//\{\{node_id\}\}/$node_id}"
+    template="${template//\{\{match_count\}\}/${MATCH_COUNT:-n/a}}"
+    template="${template//\{\{threshold\}\}/${THRESHOLD_VALUE:-n/a}}"
+    template="${template//\{\{comparator\}\}/${THRESHOLD_COMPARATOR:-n/a}}"
+    template="${template//\{\{since\}\}/${THRESHOLD_SINCE:-n/a}}"
     template="${template//\{\{http_status\}\}/${CHECK_HTTP_STATUS:-n/a}}"
     template="${template//\{\{check_exit\}\}/${CHECK_EXIT_CODE:-n/a}}"
     template="${template//\{\{action_status\}\}/$CURRENT_ACTION_STATUS}"
@@ -1639,7 +1861,7 @@ escape_json() {
 
 render_webhook_template() {
     local format="$1" template="$2" event="$3" timestamp="$4"
-    local service detail check_type http_status check_exit action_status consecutive_unavailable escalation_count
+    local service detail check_type http_status check_exit action_status consecutive_unavailable escalation_count node_id match_count threshold comparator since
 
     service="$CURRENT_SERVICE"
     detail="$(sanitize_detail "$CHECK_DETAIL")"
@@ -1649,16 +1871,26 @@ render_webhook_template() {
     action_status="$CURRENT_ACTION_STATUS"
     consecutive_unavailable="$ESCALATION_CONSECUTIVE_UNAVAILABLE"
     escalation_count="$ESCALATION_COUNT"
+    node_id="$(yaml_read '.federation.node_id // ""')"
+    [[ -n "$node_id" ]] || node_id="$(hostname -s)"
+    match_count="${MATCH_COUNT:-n/a}"
+    threshold="${THRESHOLD_VALUE:-n/a}"
+    comparator="${THRESHOLD_COMPARATOR:-n/a}"
+    since="${THRESHOLD_SINCE:-n/a}"
     case "$format" in
         html)
             service="$(escape_html "$service")"; detail="$(escape_html "$detail")"
             check_type="$(escape_html "$check_type")"; http_status="$(escape_html "$http_status")"
             check_exit="$(escape_html "$check_exit")"; action_status="$(escape_html "$action_status")"
+            node_id="$(escape_html "$node_id")"; match_count="$(escape_html "$match_count")"
+            threshold="$(escape_html "$threshold")"; comparator="$(escape_html "$comparator")"; since="$(escape_html "$since")"
             ;;
         json)
             service="$(escape_json "$service")"; detail="$(escape_json "$detail")"
             check_type="$(escape_json "$check_type")"; http_status="$(escape_json "$http_status")"
             check_exit="$(escape_json "$check_exit")"; action_status="$(escape_json "$action_status")"
+            node_id="$(escape_json "$node_id")"; match_count="$(escape_json "$match_count")"
+            threshold="$(escape_json "$threshold")"; comparator="$(escape_json "$comparator")"; since="$(escape_json "$since")"
             ;;
     esac
     template="${template//\{\{service\}\}/$service}"
@@ -1666,6 +1898,11 @@ render_webhook_template() {
     template="${template//\{\{timestamp\}\}/$timestamp}"
     template="${template//\{\{check_type\}\}/$check_type}"
     template="${template//\{\{detail\}\}/$detail}"
+    template="${template//\{\{node_id\}\}/$node_id}"
+    template="${template//\{\{match_count\}\}/$match_count}"
+    template="${template//\{\{threshold\}\}/$threshold}"
+    template="${template//\{\{comparator\}\}/$comparator}"
+    template="${template//\{\{since\}\}/$since}"
     template="${template//\{\{http_status\}\}/$http_status}"
     template="${template//\{\{check_exit\}\}/$check_exit}"
     template="${template//\{\{action_status\}\}/$action_status}"
@@ -2060,6 +2297,10 @@ run_configured_sequence() {
             export WATCHDOG_DETAIL="$CHECK_DETAIL"
             export WATCHDOG_HTTP_STATUS="$CHECK_HTTP_STATUS"
             export WATCHDOG_CHECK_EXIT="$CHECK_EXIT_CODE"
+            export WATCHDOG_MATCH_COUNT="$MATCH_COUNT"
+            export WATCHDOG_THRESHOLD="$THRESHOLD_VALUE"
+            export WATCHDOG_COMPARATOR="$THRESHOLD_COMPARATOR"
+            export WATCHDOG_SINCE="$THRESHOLD_SINCE"
             export WATCHDOG_EVENT="$label"
             export WATCHDOG_INCIDENT_ID="$INCIDENT_ID"
             export WATCHDOG_INCIDENT_DURATION="$INCIDENT_DURATION"
@@ -2103,19 +2344,243 @@ check_command() {
     return 1
 }
 
+check_disk() {
+    local path timeout_value value_type minimum thresholds='' failed=0
+    path="$(yaml_read "${CHECK_CONFIG_PATH}.path")"
+    timeout_value="$(yaml_read "${CHECK_CONFIG_PATH}.timeout // ${DEFAULT_TIMEOUT}")"
+    CHECK_HTTP_STATUS=''
+    CHECK_EXIT_CODE=1
+    if ! read_filesystem_usage "$path" "$timeout_value"; then
+        CHECK_DETAIL="disk path=${path} reason=filesystem-unavailable"
+        return 1
+    fi
+    value_type="$(yaml_read "${CHECK_CONFIG_PATH}.min_free_gb | type")"
+    if [[ "$value_type" != '!!null' ]]; then
+        minimum="$(yaml_read "${CHECK_CONFIG_PATH}.min_free_gb")"
+        thresholds=" min_free_gb=${minimum}"
+        if ! LC_ALL=C awk -v free="$FILESYSTEM_FREE_BYTES" -v threshold="$minimum" \
+            'BEGIN { exit !(free >= threshold * 1073741824) }'; then
+            failed=1
+        fi
+    fi
+    value_type="$(yaml_read "${CHECK_CONFIG_PATH}.min_free_percent | type")"
+    if [[ "$value_type" != '!!null' ]]; then
+        minimum="$(yaml_read "${CHECK_CONFIG_PATH}.min_free_percent")"
+        thresholds+=" min_free_percent=${minimum}"
+        if ! LC_ALL=C awk -v free="$FILESYSTEM_FREE_BYTES" -v total="$FILESYSTEM_TOTAL_BYTES" \
+            -v threshold="$minimum" 'BEGIN { exit !(free * 100 / total >= threshold) }'; then
+            failed=1
+        fi
+    fi
+    CHECK_DETAIL="disk path=${path} free_gb=${FILESYSTEM_FREE_GB} free_percent=${FILESYSTEM_FREE_PERCENT}${thresholds}"
+    if (( failed == 1 )); then
+        CHECK_DETAIL="low disk space; ${CHECK_DETAIL}"
+        return 1
+    fi
+    CHECK_EXIT_CODE=0
+    return 0
+}
+
+security_check_log() {
+    local level="$1" message="$2"
+    if (( PARALLEL_CHECK_MODE == 1 )); then
+        printf '%s\n' "$message"
+    else
+        log "$level" "$message"
+    fi
+}
+
+run_check_clamav() {
+    local path recursive timeout_value output_file status detail threats
+    local -a command_line=(clamscan)
+    path="$(yaml_read "${CHECK_CONFIG_PATH}.path")"
+    recursive="$(yaml_read "${CHECK_CONFIG_PATH}.recursive // false")"
+    timeout_value="$(yaml_read "${CHECK_CONFIG_PATH}.timeout // 300")"
+    [[ "$recursive" != true ]] || command_line+=(-r)
+    command_line+=("$path")
+    output_file="${TEMP_DIRECTORY}/clamav-${RANDOM}.out"
+    timeout --signal=TERM --kill-after=2s "$timeout_value" "${command_line[@]}" >"$output_file" 2>&1
+    status=$?
+    CHECK_EXIT_CODE="$status"; CHECK_HTTP_STATUS=''
+    detail="$(tail -c 2000 -- "$output_file" | tr '\r\n' '  ')"
+    threats="$(grep -c 'FOUND$' "$output_file")" || true
+    rm -f -- "$output_file"
+    case "$status" in
+        0)
+            CHECK_DETAIL=''
+            security_check_log INFO "service=${CURRENT_SERVICE} check=clamav path=${path} recursive=${recursive} result=clean exit=0"
+            return 0 ;;
+        1)
+            CHECK_DETAIL="${detail:-virus found}"
+            security_check_log WARN "service=${CURRENT_SERVICE} check=clamav result=virus_found threats=${threats:-0} detail=\"$(sanitize_detail "$CHECK_DETAIL")\" exit=1"
+            return 1 ;;
+        *)
+            if [[ "$detail" == *'Permission denied'* || "$detail" == *"Can't open"* ]]; then
+                CHECK_DETAIL="cannot read path: ${path}"
+            else
+                CHECK_DETAIL="clamscan error: ${detail:-exit ${status}}"
+            fi
+            CHECK_DETAIL="$(printf '%s' "$CHECK_DETAIL" | tail -c 2000)"
+            security_check_log ERROR "service=${CURRENT_SERVICE} check=clamav result=error detail=\"$(sanitize_detail "$CHECK_DETAIL")\" exit=${status}"
+            return 1 ;;
+    esac
+}
+
+threshold_count_pattern() {
+    local pattern="$1" input_file="$2" status
+    MATCH_COUNT="$(grep -E -c -- "$pattern" "$input_file" 2>/dev/null)"
+    status=$?
+    (( status <= 1 )) || { CHECK_DETAIL='threshold pattern evaluation failed'; CHECK_EXIT_CODE="$status"; return 1; }
+    [[ "$MATCH_COUNT" =~ ^[0-9]+$ ]] || { CHECK_DETAIL='threshold count is not numeric'; CHECK_EXIT_CODE=2; return 1; }
+}
+
+threshold_source_error() {
+    local source_type="$1" status="$2" error_file="$3" reason
+    reason="$(tail -c 500 -- "$error_file" | tr '\r\n' '  ')"
+    CHECK_EXIT_CODE="$status"
+    CHECK_DETAIL="${source_type} source error: ${reason:-exit ${status}}"
+    return 1
+}
+
+_count_journald() {
+    local timeout_value="$1" output_file="$2" error_file="$3" unit since pattern status
+    unit="$(yaml_read "${CHECK_CONFIG_PATH}.source.unit")"
+    since="$(yaml_read "${CHECK_CONFIG_PATH}.source.since")"
+    pattern="$(yaml_read "${CHECK_CONFIG_PATH}.source.pattern")"
+    THRESHOLD_SINCE="$since"
+    timeout --signal=TERM --kill-after=2s "$timeout_value" journalctl --unit "$unit" --since "$since" --no-pager --output=cat >"$output_file" 2>"$error_file"
+    status=$?
+    (( status == 0 )) || { threshold_source_error journald "$status" "$error_file"; return 1; }
+    threshold_count_pattern "$pattern" "$output_file"
+}
+
+_count_logfile() {
+    local timeout_value="$1" output_file="$2" error_file="$3" path lines pattern status
+    path="$(yaml_read "${CHECK_CONFIG_PATH}.source.path")"
+    lines="$(yaml_read "${CHECK_CONFIG_PATH}.source.tail_lines // 10000")"
+    pattern="$(yaml_read "${CHECK_CONFIG_PATH}.source.pattern")"
+    timeout --signal=TERM --kill-after=2s "$timeout_value" tail -n "$lines" -- "$path" >"$output_file" 2>"$error_file"
+    status=$?
+    (( status == 0 )) || { threshold_source_error logfile "$status" "$error_file"; return 1; }
+    threshold_count_pattern "$pattern" "$output_file"
+}
+
+_count_netstat() {
+    local timeout_value="$1" output_file="$2" error_file="$3" state pattern status normalized
+    state="$(yaml_read "${CHECK_CONFIG_PATH}.source.state // \"\"")"
+    pattern="$(yaml_read "${CHECK_CONFIG_PATH}.source.pattern // \"\"")"
+    if command -v ss >/dev/null 2>&1; then
+        if [[ -n "$state" ]]; then
+            timeout --signal=TERM --kill-after=2s "$timeout_value" ss -H -tan state "${state,,}" >"$output_file" 2>"$error_file"
+        else
+            timeout --signal=TERM --kill-after=2s "$timeout_value" ss -H -tan >"$output_file" 2>"$error_file"
+        fi
+        status=$?
+        (( status == 0 )) || { threshold_source_error netstat "$status" "$error_file"; return 1; }
+        if [[ -n "$state" ]]; then MATCH_COUNT="$(wc -l <"$output_file")"; else threshold_count_pattern "$pattern" "$output_file" || return 1; fi
+    else
+        timeout --signal=TERM --kill-after=2s "$timeout_value" netstat -tan >"$output_file" 2>"$error_file"
+        status=$?
+        (( status == 0 )) || { threshold_source_error netstat "$status" "$error_file"; return 1; }
+        if [[ -n "$state" ]]; then
+            normalized="${state^^}"; normalized="${normalized//-/_}"
+            MATCH_COUNT="$(awk -v target="$normalized" '$1 ~ /^tcp/ && toupper($NF) == target { count++ } END { print count+0 }' "$output_file")"
+        else
+            threshold_count_pattern "$pattern" "$output_file" || return 1
+        fi
+    fi
+    MATCH_COUNT="${MATCH_COUNT//[[:space:]]/}"
+    [[ "$MATCH_COUNT" =~ ^[0-9]+$ ]] || { CHECK_DETAIL='netstat count is not numeric'; CHECK_EXIT_CODE=2; return 1; }
+}
+
+_count_command() {
+    local timeout_value="$1" output_file="$2" error_file="$3" pattern status source_timeout count=''
+    local -a source_command=()
+    load_command "${CHECK_CONFIG_PATH}.source.command" source_command
+    source_timeout="$(yaml_read "${CHECK_CONFIG_PATH}.source.timeout // ${timeout_value}")"
+    timeout --signal=TERM --kill-after=2s "$source_timeout" "${source_command[@]}" >"$output_file" 2>"$error_file"
+    status=$?
+    (( status == 0 )) || { threshold_source_error command "$status" "$error_file"; return 1; }
+    pattern="$(yaml_read "${CHECK_CONFIG_PATH}.source.pattern // \"\"")"
+    if [[ -n "$pattern" ]]; then
+        threshold_count_pattern "$pattern" "$output_file"
+    else
+        IFS= read -r count <"$output_file" || true
+        count="${count//[[:space:]]/}"
+        [[ "$count" =~ ^[0-9]+$ ]] || { CHECK_DETAIL='command source must output a non-negative integer'; CHECK_EXIT_CODE=2; return 1; }
+        MATCH_COUNT="$count"
+    fi
+}
+
+_compare_numbers() {
+    local count="$1" threshold="$2" comparator="$3"
+    LC_ALL=C awk -v count="$count" -v threshold="$threshold" -v operator="$comparator" 'BEGIN {
+        if (operator == ">") exit !(count > threshold)
+        if (operator == ">=") exit !(count >= threshold)
+        if (operator == "<") exit !(count < threshold)
+        if (operator == "<=") exit !(count <= threshold)
+        if (operator == "==") exit !(count == threshold)
+        if (operator == "!=") exit !(count != threshold)
+        exit 2
+    }'
+}
+
+run_check_threshold() {
+    local source_type timeout_value output_file error_file status comparison_status
+    source_type="$(yaml_read "${CHECK_CONFIG_PATH}.source.type")"
+    timeout_value="$(yaml_read "${CHECK_CONFIG_PATH}.timeout // ${DEFAULT_TIMEOUT}")"
+    THRESHOLD_VALUE="$(yaml_read "${CHECK_CONFIG_PATH}.threshold")"
+    THRESHOLD_COMPARATOR="$(yaml_read "${CHECK_CONFIG_PATH}.comparator // \">\"")"
+    MATCH_COUNT=''; THRESHOLD_SINCE=''; CHECK_HTTP_STATUS=''; CHECK_EXIT_CODE=0
+    output_file="${TEMP_DIRECTORY}/threshold-${RANDOM}.out"
+    error_file="${TEMP_DIRECTORY}/threshold-${RANDOM}.err"
+    case "$source_type" in
+        journald) _count_journald "$timeout_value" "$output_file" "$error_file" ; status=$? ;;
+        logfile) _count_logfile "$timeout_value" "$output_file" "$error_file" ; status=$? ;;
+        netstat) _count_netstat "$timeout_value" "$output_file" "$error_file" ; status=$? ;;
+        command) _count_command "$timeout_value" "$output_file" "$error_file" ; status=$? ;;
+        *) CHECK_DETAIL='unsupported threshold source'; CHECK_EXIT_CODE=2; status=1 ;;
+    esac
+    rm -f -- "$output_file" "$error_file"
+    if (( status != 0 )); then
+        security_check_log ERROR "service=${CURRENT_SERVICE} check=threshold source=${source_type} result=error detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
+        return 1
+    fi
+    _compare_numbers "$MATCH_COUNT" "$THRESHOLD_VALUE" "$THRESHOLD_COMPARATOR"
+    comparison_status=$?
+    if (( comparison_status == 0 )); then
+        CHECK_DETAIL="${MATCH_COUNT} matches (threshold: ${THRESHOLD_VALUE} ${THRESHOLD_COMPARATOR})"
+        security_check_log WARN "service=${CURRENT_SERVICE} check=threshold source=${source_type} count=${MATCH_COUNT} threshold=${THRESHOLD_VALUE} comparator=${THRESHOLD_COMPARATOR} result=threshold_exceeded"
+        return 1
+    fi
+    if (( comparison_status != 1 )); then
+        CHECK_DETAIL='threshold comparison failed'; CHECK_EXIT_CODE=2
+        security_check_log ERROR "service=${CURRENT_SERVICE} check=threshold source=${source_type} result=error reason=invalid-comparator"
+        return 1
+    fi
+    CHECK_DETAIL=''
+    security_check_log INFO "service=${CURRENT_SERVICE} check=threshold source=${source_type} count=${MATCH_COUNT} threshold=${THRESHOLD_VALUE} comparator=${THRESHOLD_COMPARATOR} result=below_threshold"
+    return 0
+}
+
 perform_single_check() {
     local index="$1"
     case "$CURRENT_CHECK_TYPE" in
         http) check_http "$index" ;;
         tcp) check_tcp "$index" ;;
         command) check_command "$index" ;;
+        disk) check_disk ;;
+        clamav) run_check_clamav ;;
+        threshold) run_check_threshold ;;
         *) return 1 ;;
     esac
 }
 
 check_with_retries() {
     local index="$1"
-    local attempts retry_delay attempt
+    local attempts retry_delay attempt started_epoch
+    started_epoch="$(date '+%s')"
+    HISTORY_CHECKED["$CURRENT_SERVICE"]=1
     attempts="$(yaml_read "${CHECK_CONFIG_PATH}.attempts // ${DEFAULT_ATTEMPTS}")"
     retry_delay="$(yaml_read "${CHECK_CONFIG_PATH}.retry_delay // ${DEFAULT_RETRY_DELAY}")"
 
@@ -2123,6 +2588,7 @@ check_with_retries() {
         record_check_attempt "$CURRENT_SERVICE"
         log INFO "service=${CURRENT_SERVICE} action=check attempt=${attempt}/${attempts} type=${CURRENT_CHECK_TYPE}"
         if perform_single_check "$index"; then
+            HISTORY_CHECK_DURATION["$CURRENT_SERVICE"]=$(( ${HISTORY_CHECK_DURATION[$CURRENT_SERVICE]:-0} + $(date '+%s') - started_epoch ))
             (( DRY_RUN == 1 )) || write_service_marker_number "$CURRENT_SERVICE" last-success "$(date '+%s')"
             log INFO "service=${CURRENT_SERVICE} result=check-success attempt=${attempt}/${attempts} detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
             return 0
@@ -2133,6 +2599,7 @@ check_with_retries() {
             sleep "$retry_delay"
         fi
     done
+    HISTORY_CHECK_DURATION["$CURRENT_SERVICE"]=$(( ${HISTORY_CHECK_DURATION[$CURRENT_SERVICE]:-0} + $(date '+%s') - started_epoch ))
     return 1
 }
 
@@ -2157,36 +2624,43 @@ check_with_retries_parallel() {
 parallel_timeout_for_service() {
     local index="$1" type timeout_value
     type="$(yaml_read ".services[$index].check.timeout | type")"
-    if [[ "$type" == "!!null" ]]; then printf '%s' "$PARALLEL_TIMEOUT"; else
+    if [[ "$type" == "!!null" ]]; then
+        if [[ "$(yaml_read ".services[$index].check.type")" == clamav ]]; then printf 300; else printf '%s' "$PARALLEL_TIMEOUT"; fi
+    else
         timeout_value="$(yaml_read ".services[$index].check.timeout")"; printf '%s' "$timeout_value"
     fi
 }
 
 write_parallel_result() {
-    local result_file="$1" state="$2" detail="$3" http_status="$4" exit_code="$5" attempts="$6" temporary detail_encoded
+    local result_file="$1" state="$2" detail="$3" http_status="$4" exit_code="$5" attempts="$6" duration="$7" temporary detail_encoded since_encoded
     temporary="${result_file}.tmp.${BASHPID}"
     detail_encoded="$(printf '%s' "$detail" | base64 | tr -d '\n')"
-    { printf 'state=%s\n' "$state"; printf 'detail_b64=%s\n' "$detail_encoded"; printf 'http_status=%s\n' "$http_status"; printf 'check_exit=%s\n' "$exit_code"; printf 'attempts=%s\n' "$attempts"; printf 'timestamp=%s\n' "$(date '+%s')"; } >"$temporary" && mv -f -- "$temporary" "$result_file"
+    since_encoded="$(printf '%s' "$THRESHOLD_SINCE" | base64 | tr -d '\n')"
+    { printf 'state=%s\n' "$state"; printf 'detail_b64=%s\n' "$detail_encoded"; printf 'http_status=%s\n' "$http_status"; printf 'check_exit=%s\n' "$exit_code"; printf 'attempts=%s\n' "$attempts"; printf 'duration=%s\n' "$duration"; printf 'match_count=%s\n' "$MATCH_COUNT"; printf 'threshold=%s\n' "$THRESHOLD_VALUE"; printf 'comparator=%s\n' "$THRESHOLD_COMPARATOR"; printf 'since_b64=%s\n' "$since_encoded"; printf 'timestamp=%s\n' "$(date '+%s')"; } >"$temporary" && mv -f -- "$temporary" "$result_file"
 }
 
 _run_single_check_bg() {
-    local index="$1" service_name="$2" result_file="$3" log_file="$4" timeout_value worker_pid timer_pid="" check_state=unavailable
+    local index="$1" service_name="$2" result_file="$3" log_file="$4" timeout_value worker_pid timer_pid="" check_state=unavailable started_epoch
     # Check helpers use TEMP_DIRECTORY for curl and command output. Shadow it
     # for this worker so concurrent checks never share temporary files.
     local TEMP_DIRECTORY="${TEMP_DIRECTORY}/${service_name}.${BASHPID}"
     (
+        # The parent owns the global lock; worker descendants (notably the
+        # timeout sleeper) must not keep it open after the main run exits.
+        exec 9>&-
         exec >"$log_file" 2>&1
         CURRENT_SERVICE="$service_name"; CHECK_CONFIG_PATH=".services[$index].check"; CURRENT_CHECK_TYPE="$(yaml_read "${CHECK_CONFIG_PATH}.type")"
-        CHECK_DETAIL=""; CHECK_HTTP_STATUS=""; CHECK_EXIT_CODE=""; PARALLEL_CHECK_MODE=1
+        CHECK_DETAIL=""; CHECK_HTTP_STATUS=""; CHECK_EXIT_CODE=""; MATCH_COUNT=""; THRESHOLD_VALUE=""; THRESHOLD_COMPARATOR=""; THRESHOLD_SINCE=""; PARALLEL_CHECK_MODE=1
         mkdir -p -- "$TEMP_DIRECTORY" || exit 1
+        started_epoch="$(date '+%s')"
         timeout_value="$(parallel_timeout_for_service "$index")"; worker_pid="$BASHPID"
         if (( timeout_value > 0 )); then
-            ( sleep "$timeout_value"; write_parallel_result "$result_file" unavailable "check timed out (parallel check timeout)" "" 124 "$PARALLEL_ATTEMPTS_MADE"; kill -KILL "$worker_pid" 2>/dev/null || true ) &
+            ( sleep "$timeout_value"; write_parallel_result "$result_file" unavailable "check timed out (parallel check timeout)" "" 124 "$PARALLEL_ATTEMPTS_MADE" "$timeout_value"; kill -KILL "$worker_pid" 2>/dev/null || true ) &
             timer_pid=$!
         fi
         check_with_retries_parallel "$index" && check_state=healthy
         [[ -z "$timer_pid" ]] || { kill "$timer_pid" 2>/dev/null || true; wait "$timer_pid" 2>/dev/null || true; }
-        write_parallel_result "$result_file" "$check_state" "$CHECK_DETAIL" "$CHECK_HTTP_STATUS" "$CHECK_EXIT_CODE" "$PARALLEL_ATTEMPTS_MADE"
+        write_parallel_result "$result_file" "$check_state" "$CHECK_DETAIL" "$CHECK_HTTP_STATUS" "$CHECK_EXIT_CODE" "$PARALLEL_ATTEMPTS_MADE" "$(( $(date '+%s') - started_epoch ))"
         rm -rf -- "$TEMP_DIRECTORY"
     )
 }
@@ -2205,17 +2679,19 @@ should_run_parallel() {
 
 collect_check_results() {
     local -n services_ref="$1"
-    local service_name result_file log_file line key value detail_encoded
+    local service_name result_file log_file line key value detail_encoded since_encoded
     for service_name in "${services_ref[@]}"; do
         result_file="${TEMP_DIRECTORY}/${service_name}.result"
         PRELOADED_CHECK_STATE["$service_name"]=unavailable; PRELOADED_CHECK_DETAIL["$service_name"]="check process did not write result"
-        PRELOADED_CHECK_HTTP_STATUS["$service_name"]=""; PRELOADED_CHECK_EXIT_CODE["$service_name"]=""; PRELOADED_CHECK_ATTEMPTS["$service_name"]=0
+        PRELOADED_CHECK_HTTP_STATUS["$service_name"]=""; PRELOADED_CHECK_EXIT_CODE["$service_name"]=""; PRELOADED_CHECK_ATTEMPTS["$service_name"]=0; PRELOADED_CHECK_DURATION["$service_name"]=0
+        PRELOADED_MATCH_COUNT["$service_name"]=""; PRELOADED_THRESHOLD_VALUE["$service_name"]=""; PRELOADED_THRESHOLD_COMPARATOR["$service_name"]=""; PRELOADED_THRESHOLD_SINCE["$service_name"]=""
         if [[ ! -r "$result_file" ]]; then log WARN "service=${service_name} phase=check mode=parallel result=missing temp_file_missing=true action=marked_unavailable"; continue; fi
-        detail_encoded=""
+        detail_encoded=""; since_encoded=""
         while IFS='=' read -r key value; do
-            case "$key" in state) PRELOADED_CHECK_STATE["$service_name"]="$value" ;; detail_b64) detail_encoded="$value" ;; http_status) PRELOADED_CHECK_HTTP_STATUS["$service_name"]="$value" ;; check_exit) PRELOADED_CHECK_EXIT_CODE["$service_name"]="$value" ;; attempts) PRELOADED_CHECK_ATTEMPTS["$service_name"]="$value" ;; esac
+            case "$key" in state) PRELOADED_CHECK_STATE["$service_name"]="$value" ;; detail_b64) detail_encoded="$value" ;; http_status) PRELOADED_CHECK_HTTP_STATUS["$service_name"]="$value" ;; check_exit) PRELOADED_CHECK_EXIT_CODE["$service_name"]="$value" ;; attempts) PRELOADED_CHECK_ATTEMPTS["$service_name"]="$value" ;; duration) PRELOADED_CHECK_DURATION["$service_name"]="$value" ;; match_count) PRELOADED_MATCH_COUNT["$service_name"]="$value" ;; threshold) PRELOADED_THRESHOLD_VALUE["$service_name"]="$value" ;; comparator) PRELOADED_THRESHOLD_COMPARATOR["$service_name"]="$value" ;; since_b64) since_encoded="$value" ;; esac
         done <"$result_file"
         [[ -z "$detail_encoded" ]] || PRELOADED_CHECK_DETAIL["$service_name"]="$(printf '%s' "$detail_encoded" | base64 --decode 2>/dev/null || true)"
+        [[ -z "$since_encoded" ]] || PRELOADED_THRESHOLD_SINCE["$service_name"]="$(printf '%s' "$since_encoded" | base64 --decode 2>/dev/null || true)"
         [[ "${PRELOADED_CHECK_STATE[$service_name]}" == healthy || "${PRELOADED_CHECK_STATE[$service_name]}" == unavailable ]] || { PRELOADED_CHECK_STATE["$service_name"]=unavailable; PRELOADED_CHECK_DETAIL["$service_name"]="invalid parallel check result"; }
         log INFO "service=${service_name} phase=check mode=parallel result=${PRELOADED_CHECK_STATE[$service_name]} detail=\"$(sanitize_detail "${PRELOADED_CHECK_DETAIL[$service_name]}")\""
         log_file="${TEMP_DIRECTORY}/${service_name}.log"
@@ -2256,6 +2732,12 @@ use_preloaded_check_result() {
     CHECK_DETAIL="${PRELOADED_CHECK_DETAIL[$service_name]}"
     CHECK_HTTP_STATUS="${PRELOADED_CHECK_HTTP_STATUS[$service_name]}"
     CHECK_EXIT_CODE="${PRELOADED_CHECK_EXIT_CODE[$service_name]}"
+    MATCH_COUNT="${PRELOADED_MATCH_COUNT[$service_name]:-}"
+    THRESHOLD_VALUE="${PRELOADED_THRESHOLD_VALUE[$service_name]:-}"
+    THRESHOLD_COMPARATOR="${PRELOADED_THRESHOLD_COMPARATOR[$service_name]:-}"
+    THRESHOLD_SINCE="${PRELOADED_THRESHOLD_SINCE[$service_name]:-}"
+    HISTORY_CHECKED["$service_name"]=1
+    HISTORY_CHECK_DURATION["$service_name"]="${PRELOADED_CHECK_DURATION[$service_name]:-0}"
     attempts="${PRELOADED_CHECK_ATTEMPTS[$service_name]:-0}"
     [[ "$attempts" =~ ^[0-9]+$ ]] || attempts=0
     for ((attempt = 0; attempt < attempts; attempt++)); do record_check_attempt "$service_name"; done
@@ -2289,7 +2771,7 @@ process_parallel_level() {
     (( ${#parallel_checks[@]} == 0 )) || run_checks_parallel parallel_checks
     for service_name in "${sequential_checks[@]}"; do index="${SERVICE_INDEX[$service_name]}"; _run_single_check_bg "$index" "$service_name" "${TEMP_DIRECTORY}/${service_name}.result" "${TEMP_DIRECTORY}/${service_name}.log"; done
     (( ${#sequential_checks[@]} == 0 )) || collect_check_results sequential_checks
-    for service_name in "${level_services[@]}"; do index="${SERVICE_INDEX[$service_name]}"; process_service "$index"; RESOLVED_STATE["$service_name"]="$PROCESS_RESULT"; done
+    for service_name in "${level_services[@]}"; do index="${SERVICE_INDEX[$service_name]}"; process_service "$index"; RESOLVED_STATE["$service_name"]="$PROCESS_RESULT"; history_capture_service "$service_name"; done
 }
 
 read_state() {
@@ -3643,6 +4125,10 @@ process_service() {
     CHECK_DETAIL=""
     CHECK_HTTP_STATUS=""
     CHECK_EXIT_CODE=""
+    MATCH_COUNT=""
+    THRESHOLD_VALUE=""
+    THRESHOLD_COMPARATOR=""
+    THRESHOLD_SINCE=""
     enabled="$(yaml_read_true_default ".services[$index].enabled")"
 
     if [[ "$enabled" != true ]]; then
@@ -3828,6 +4314,265 @@ process_service() {
     UNHEALTHY_FOUND=1
     log ERROR "service=${CURRENT_SERVICE} result=unavailable detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
     return 0
+}
+
+history_capture_service() {
+    local service_name="$1"
+    (( HISTORY_ENABLED == 1 && DRY_RUN == 0 )) || return 0
+    [[ -n "${HISTORY_CHECKED[$service_name]:-}" ]] || return 0
+    HISTORY_SERVICES+=("$service_name")
+    HISTORY_TIMESTAMP["$service_name"]="$(date -Iseconds)"
+    HISTORY_STATE["$service_name"]="$PROCESS_RESULT"
+    HISTORY_CHECK_TYPE["$service_name"]="$CURRENT_CHECK_TYPE"
+    HISTORY_DETAIL["$service_name"]="$(sanitize_detail "$CHECK_DETAIL")"
+    HISTORY_HTTP_STATUS["$service_name"]="$CHECK_HTTP_STATUS"
+    HISTORY_CHECK_EXIT["$service_name"]="$CHECK_EXIT_CODE"
+    HISTORY_ACTION_STATUS["$service_name"]="$CURRENT_ACTION_STATUS"
+    HISTORY_DURATION["$service_name"]="${HISTORY_CHECK_DURATION[$service_name]:-0}"
+}
+
+history_field_value() {
+    local field="$1" service_name="$2"
+    case "$field" in
+        timestamp) printf '%s' "${HISTORY_TIMESTAMP[$service_name]}" ;;
+        node_id) printf '%s' "$HISTORY_NODE_ID" ;;
+        service) printf '%s' "$service_name" ;;
+        state) printf '%s' "${HISTORY_STATE[$service_name]}" ;;
+        check_type) printf '%s' "${HISTORY_CHECK_TYPE[$service_name]}" ;;
+        detail) printf '%s' "${HISTORY_DETAIL[$service_name]}" ;;
+        http_status) printf '%s' "${HISTORY_HTTP_STATUS[$service_name]}" ;;
+        check_exit) printf '%s' "${HISTORY_CHECK_EXIT[$service_name]}" ;;
+        action_status) printf '%s' "${HISTORY_ACTION_STATUS[$service_name]}" ;;
+        duration_sec) printf '%s' "${HISTORY_DURATION[$service_name]}" ;;
+    esac
+}
+
+history_sql_quote() {
+    local value="$1"
+    value="${value//\'/\'\'}"
+    printf "'%s'" "$value"
+}
+
+history_field_literal() {
+    local field="$1" value="$2" format="$3"
+    if [[ "$field" == http_status || "$field" == check_exit || "$field" == duration_sec ]]; then
+        if [[ "$value" =~ ^[0-9]+$ ]]; then printf '%s' "$((10#$value))"; else printf null; fi
+    elif [[ "$format" == json ]]; then
+        printf '"%s"' "$(escape_json "$value")"
+    else
+        history_sql_quote "$value"
+    fi
+}
+
+rotate_history() {
+    local file="$1" removed=0 lines temp
+    (( HISTORY_ENABLED == 1 )) || return 0
+    if [[ "$HISTORY_STORAGE" == sqlite ]]; then
+        (( HISTORY_MAX_AGE_DAYS > 0 )) || return 0
+        removed="$(sqlite3 -batch -bail "$HISTORY_PATH" "DELETE FROM checks WHERE datetime(timestamp) < datetime('now', '-${HISTORY_MAX_AGE_DAYS} days'); SELECT changes();")" || die 'history=error storage=sqlite reason=rotation-failed'
+        log INFO "history=rotated storage=sqlite deleted=${removed} rows"
+    elif [[ "$HISTORY_ROTATION_MODE" == daily ]]; then
+        (( HISTORY_MAX_AGE_DAYS > 0 )) || return 0
+        removed="$(find "$HISTORY_PATH" -maxdepth 1 -type f -name 'history_????-??-??.jsonl' -mmin "+$((HISTORY_MAX_AGE_DAYS * 1440))" -print -delete | wc -l)" ||
+            die 'history=error storage=jsonl reason=rotation-failed'
+        log INFO "history=rotated storage=jsonl deleted=${removed} mode=daily"
+    elif (( HISTORY_MAX_RECORDS > 0 )); then
+        lines="$(wc -l <"$file")"
+        if (( lines > HISTORY_MAX_RECORDS )); then
+            temp="$(mktemp "${file}.tmp.XXXXXX")" || die 'history=error storage=jsonl reason=rotation-temp-failed'
+            tail -n "$HISTORY_MAX_RECORDS" -- "$file" >"$temp" || die 'history=error storage=jsonl reason=rotation-read-failed'
+            chmod 0640 "$temp" 2>/dev/null || true
+            mv -f -- "$temp" "$file" || die 'history=error storage=jsonl reason=rotation-move-failed'
+            log INFO "history=rotated storage=jsonl truncated=$((lines - HISTORY_MAX_RECORDS)) mode=single"
+        fi
+    fi
+}
+
+write_history() {
+    local service_name field value literal line comma file columns values
+    (( HISTORY_ENABLED == 1 )) || { log INFO 'history=skipped reason=history.enabled=false'; return 0; }
+    (( DRY_RUN == 0 )) || return 0
+    (( ${#HISTORY_SERVICES[@]} > 0 )) || return 0
+    HISTORY_NODE_ID="$(yaml_read '.federation.node_id // ""')"
+    [[ -n "$HISTORY_NODE_ID" ]] || HISTORY_NODE_ID="$(hostname -s)"
+    if [[ "$HISTORY_STORAGE" == jsonl ]]; then
+        mkdir -p -- "$HISTORY_PATH" || die 'history=error storage=jsonl reason=mkdir-failed'
+        if [[ "$HISTORY_ROTATION_MODE" == daily ]]; then
+            file="${HISTORY_PATH}/history_$(date '+%Y-%m-%d').jsonl"
+        else
+            file="${HISTORY_PATH}/history.jsonl"
+        fi
+        for service_name in "${HISTORY_SERVICES[@]}"; do
+            line='{'; comma=''
+            for field in "${HISTORY_FIELDS[@]}"; do
+                value="$(history_field_value "$field" "$service_name")"
+                literal="$(history_field_literal "$field" "$value" json)"
+                line+="${comma}\"${field}\":${literal}"; comma=,
+            done
+            line+='}'
+            printf '%s\n' "$line" >>"$file" || die 'history=error storage=jsonl reason=append-failed'
+        done
+        chmod 0640 "$file" 2>/dev/null || true
+        log INFO "history=written storage=jsonl file=${file} records=${#HISTORY_SERVICES[@]}"
+    else
+        mkdir -p -- "$(dirname -- "$HISTORY_PATH")" || die 'history=error storage=sqlite reason=mkdir-failed'
+        {
+            printf 'CREATE TABLE IF NOT EXISTS checks (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, node_id TEXT, service TEXT NOT NULL, state TEXT NOT NULL, check_type TEXT, detail TEXT, http_status INTEGER, check_exit INTEGER, action_status TEXT, duration_sec INTEGER);\n'
+            printf 'CREATE INDEX IF NOT EXISTS idx_checks_service_time ON checks(service, timestamp);\n'
+            printf 'CREATE INDEX IF NOT EXISTS idx_checks_timestamp ON checks(timestamp);\n'
+            printf 'BEGIN IMMEDIATE;\n'
+            for service_name in "${HISTORY_SERVICES[@]}"; do
+                columns=''; values=''; comma=''
+                for field in "${HISTORY_FIELDS[@]}"; do
+                    value="$(history_field_value "$field" "$service_name")"
+                    literal="$(history_field_literal "$field" "$value" sql)"
+                    columns+="${comma}${field}"; values+="${comma}${literal}"; comma=,
+                done
+                printf 'INSERT INTO checks (%s) VALUES (%s);\n' "$columns" "$values"
+            done
+            printf 'COMMIT;\n'
+        } | sqlite3 -batch -bail "$HISTORY_PATH" >/dev/null || die 'history=error storage=sqlite reason=insert-failed'
+        chmod 0640 "$HISTORY_PATH" 2>/dev/null || true
+        log INFO "history=written storage=sqlite db=${HISTORY_PATH} records=${#HISTORY_SERVICES[@]}"
+        file="$HISTORY_PATH"
+    fi
+    rotate_history "$file"
+}
+
+# Only the three mandatory, validated fields are needed for aggregate reports.
+# A generated service name contains no tabs or JSON escapes, so awk can read
+# these fields without adding jq or interpreting arbitrary check details.
+history_rows() {
+    local file
+    if [[ "$HISTORY_STORAGE" == sqlite ]]; then
+        [[ -f "$HISTORY_PATH" ]] || return 0
+        sqlite3 -readonly -batch -bail -separator $'\t' "$HISTORY_PATH" 'SELECT timestamp, service, state FROM checks ORDER BY datetime(timestamp), id;' || return 1
+    else
+        if [[ "$HISTORY_ROTATION_MODE" == daily ]]; then
+            for file in "$HISTORY_PATH"/history_????-??-??.jsonl; do
+                [[ -f "$file" ]] || continue
+                awk '
+                    function field(key, text, pattern, value) {
+                        pattern = "\"" key "\"[[:space:]]*:[[:space:]]*\"[^\"]*\""
+                        if (!match(text, pattern)) return ""
+                        value = substr(text, RSTART, RLENGTH)
+                        sub(/^.*:[[:space:]]*"/, "", value)
+                        sub(/"$/, "", value)
+                        return value
+                    }
+                    { t=field("timestamp",$0); s=field("service",$0); st=field("state",$0); if (t!="" && s!="" && st!="") print t "\t" s "\t" st }
+                ' "$file"
+            done
+        else
+            file="$HISTORY_PATH/history.jsonl"
+            [[ -f "$file" ]] || return 0
+            awk '
+                function field(key, text, pattern, value) {
+                    pattern = "\"" key "\"[[:space:]]*:[[:space:]]*\"[^\"]*\""
+                    if (!match(text, pattern)) return ""
+                    value = substr(text, RSTART, RLENGTH)
+                    sub(/^.*:[[:space:]]*"/, "", value)
+                    sub(/"$/, "", value)
+                    return value
+                }
+                { t=field("timestamp",$0); s=field("service",$0); st=field("state",$0); if (t!="" && s!="" && st!="") print t "\t" s "\t" st }
+            ' "$file"
+        fi
+    fi
+}
+
+history_check_reader() {
+    local file
+    if [[ "$HISTORY_STORAGE" == sqlite ]]; then
+        [[ -f "$HISTORY_PATH" ]] || return 0
+        sqlite3 -readonly -batch -bail "$HISTORY_PATH" 'SELECT timestamp, service, state FROM checks LIMIT 0;' >/dev/null 2>&1 ||
+            die 'history.path is not a readable history database.'
+    elif [[ "$HISTORY_ROTATION_MODE" == daily ]]; then
+        for file in "$HISTORY_PATH"/history_????-??-??.jsonl; do
+            [[ ! -f "$file" || -r "$file" ]] || die "Cannot read history file: ${file}"
+        done
+    else
+        file="$HISTORY_PATH/history.jsonl"
+        [[ ! -f "$file" || -r "$file" ]] || die "Cannot read history file: ${file}"
+    fi
+}
+
+generate_report() {
+    local period="$1" cutoff now timestamp service_name state epoch percent downtime name
+    local -a names=()
+    local -A seen=() total=() healthy=() unavailable=() falls=() down_start=() down_seconds=() previous=()
+    history_check_reader
+    now="$(date '+%s')"
+    case "$period" in
+        daily) cutoff="$(date -d 'today 00:00:00' '+%s')" ;;
+        weekly) cutoff=$((now - 7 * 86400)) ;;
+        monthly) cutoff=$((now - 30 * 86400)) ;;
+    esac
+    while IFS=$'\t' read -r timestamp service_name state; do
+        [[ -n "$timestamp" && "$service_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
+        epoch="$(date -d "$timestamp" '+%s' 2>/dev/null)" || continue
+        (( epoch >= cutoff && epoch <= now )) || continue
+        if [[ -z "${seen[$service_name]:-}" ]]; then seen["$service_name"]=1; names+=("$service_name"); fi
+        total["$service_name"]=$(( ${total[$service_name]:-0} + 1 ))
+        [[ "$state" != healthy ]] || healthy["$service_name"]=$(( ${healthy[$service_name]:-0} + 1 ))
+        [[ "$state" != unavailable ]] || unavailable["$service_name"]=$(( ${unavailable[$service_name]:-0} + 1 ))
+        if [[ "$state" == unavailable && -z "${down_start[$service_name]:-}" ]]; then
+            [[ "${previous[$service_name]:-}" != healthy ]] || falls["$service_name"]=$(( ${falls[$service_name]:-0} + 1 ))
+            down_start["$service_name"]="$epoch"
+        elif [[ "$state" == healthy && -n "${down_start[$service_name]:-}" ]]; then
+            down_seconds["$service_name"]=$(( ${down_seconds[$service_name]:-0} + epoch - down_start[$service_name] ))
+            unset "down_start[$service_name]"
+        fi
+        previous["$service_name"]="$state"
+    done < <(history_rows)
+    printf 'SERVICE | TOTAL | HEALTHY | UNAVAILABLE | UPTIME | FALLS | DOWNTIME\n'
+    for name in "${names[@]}"; do
+        downtime="${down_seconds[$name]:-0}"
+        if [[ -n "${down_start[$name]:-}" ]]; then downtime=$((downtime + now - down_start[$name])); fi
+        percent="$(awk -v ok="${healthy[$name]:-0}" -v all="${total[$name]}" 'BEGIN { printf "%.1f%%", 100*ok/all }')"
+        printf '%-25s | %5s | %7s | %11s | %6s | %5s | %s\n' "$name" "${total[$name]}" "${healthy[$name]:-0}" "${unavailable[$name]:-0}" "$percent" "${falls[$name]:-0}" "$(status_duration "$downtime")"
+    done
+    bootstrap_log INFO "report=${period} services=${#names[@]} period=$(date -d "@$cutoff" '+%Y-%m-%d')"
+}
+
+generate_trend() {
+    local service_name="$1" row timestamp state epoch timeline='' total=0 healthy=0 falls=0 previous='' down_start='' down_total=0 completed=0 last_fall='' last_duration='' now percent mttr
+    local -a rows=()
+    history_check_reader
+    [[ "$service_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die 'trend service must be a valid service name.'
+    mapfile -t rows < <(history_rows | awk -F '\t' -v target="$service_name" '$2 == target' | tail -n "$HISTORY_TREND_DOTS")
+    now="$(date '+%s')"
+    for row in "${rows[@]}"; do
+        IFS=$'\t' read -r timestamp _ state <<<"$row"
+        epoch="$(date -d "$timestamp" '+%s' 2>/dev/null)" || continue
+        total=$((total + 1))
+        if [[ "$state" == healthy ]]; then timeline+='█'; healthy=$((healthy + 1)); else timeline+='░'; fi
+        if [[ "$state" == unavailable && -z "$down_start" ]]; then
+            [[ "$previous" != healthy ]] || falls=$((falls + 1))
+            down_start="$epoch"; last_fall="$timestamp"; last_duration='ongoing'
+        elif [[ "$state" == healthy && -n "$down_start" ]]; then
+            last_duration=$((epoch - down_start))
+            down_total=$((down_total + last_duration))
+            completed=$((completed + 1))
+            down_start=''
+        fi
+        previous="$state"
+    done
+    if (( total == 0 )); then
+        printf '%s: no history records\n' "$service_name"
+        bootstrap_log INFO "trend=generated service=${service_name} dots=0 uptime=n/a"
+        return 0
+    fi
+    percent="$(awk -v ok="$healthy" -v all="$total" 'BEGIN { printf "%.1f", 100*ok/all }')"
+    if (( completed > 0 )); then mttr="$(status_duration "$((down_total / completed))")"; else mttr='n/a'; fi
+    if [[ -n "$down_start" ]]; then last_duration=$((now - down_start)); fi
+    [[ "$last_duration" != '' && "$last_duration" != ongoing ]] && last_duration="$(status_duration "$last_duration")"
+    [[ -n "$last_fall" ]] || last_fall='n/a'
+    [[ -n "$last_duration" ]] || last_duration='n/a'
+    printf '%s [%s] %s%% (%s/%s)\n' "$service_name" "$timeline" "$percent" "$healthy" "$total"
+    printf '█ healthy  ░ unavailable/degraded/recovering\n'
+    printf 'Uptime: %s%% | Falls: %s | MTTR: %s | Last fall: %s (%s)\n' "$percent" "$falls" "$mttr" "$last_fall" "$last_duration"
+    bootstrap_log INFO "trend=generated service=${service_name} dots=${total} uptime=${percent}%"
 }
 
 notify_test_run() {
@@ -4041,6 +4786,22 @@ main() {
 
     case "${1:-}" in
         validate) VALIDATE_ONLY=1; COMMAND_MODE=validate; shift ;;
+        --report|--trend)
+            HISTORY_COMMAND="$1"; COMMAND_MODE=history; VALIDATE_ONLY=1; shift
+            (( $# > 0 )) || die "${HISTORY_COMMAND} requires a value."
+            HISTORY_ARGUMENT="$1"; shift
+            if [[ "$HISTORY_COMMAND" == --report ]]; then
+                case "$HISTORY_ARGUMENT" in daily|weekly|monthly) ;; *) die 'Report period must be daily, weekly, or monthly.' ;; esac
+            fi
+            while (( $# > 0 )); do
+                case "$1" in
+                    -c|--config) (( $# >= 2 )) || die 'Option -c requires a value.'; CONFIG_FILE="$2"; shift 2 ;;
+                    -h|--help) usage; exit 0 ;;
+                    *) die "Unexpected argument: $1" ;;
+                esac
+            done
+            set --
+            ;;
         notify-test|status)
             COMMAND_MODE="$1"; VALIDATE_ONLY=1
             [[ "$COMMAND_MODE" != notify-test ]] || NOTIFY_TEST_MODE=1
@@ -4109,9 +4870,14 @@ main() {
     yq eval '.' "$CONFIG_FILE" >/dev/null 2>&1 || die "YAML is syntactically invalid: ${CONFIG_FILE}"
     load_runtime_settings
     validate_templates
-    if [[ "$COMMAND_MODE" == status ]]; then expand_templates_readonly; else expand_templates; fi
+    if [[ "$COMMAND_MODE" == status || "$COMMAND_MODE" == history ]]; then expand_templates_readonly; else expand_templates; fi
     validate_configuration
+    history_validate_config
     if [[ "$COMMAND_MODE" == status ]]; then status_run; exit $?; fi
+    if [[ "$COMMAND_MODE" == history ]]; then
+        if [[ "$HISTORY_COMMAND" == --report ]]; then generate_report "$HISTORY_ARGUMENT"; else generate_trend "$HISTORY_ARGUMENT"; fi
+        exit $?
+    fi
     if [[ "$COMMAND_MODE" == notify-test ]]; then notify_test_run; exit $?; fi
     if (( VALIDATE_ONLY == 1 )); then
         if [[ "$(yaml_read '.security.remediation_policy.mode // "legacy"')" == legacy ]]; then
@@ -4180,12 +4946,14 @@ main() {
             index="${SERVICE_INDEX[$name]}"
             process_service "$index"
             RESOLVED_STATE["$name"]="$PROCESS_RESULT"
+            history_capture_service "$name"
         done
     fi
 
     write_prometheus_metrics
     generate_status_page
     federation_agent_send_report
+    write_history
 
     if (( UNHEALTHY_FOUND == 1 || ACTION_ATTEMPTED == 1 )); then
         log WARN "action=watchdog-finish exit=1 unhealthy=${UNHEALTHY_FOUND} remediation=${ACTION_ATTEMPTED}"

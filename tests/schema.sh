@@ -58,10 +58,18 @@ if not invalid_paths:
 expected_fields = {
     "check-and-health": "services[0]",
     "check-type": "services[0].check.type",
+    "disk-high-percent": "services[0].check.min_free_percent",
+    "disk-missing-threshold": "services[0].check",
+    "disk-relative-path": "services[0].check.path",
     "email-secrets": "notifications.email.smtp.password_env",
+    "history-relative-path": "history.path",
+    "history-storage": "history.storage",
     "maintenance-time": "maintenance.windows[0].time",
     "missing-command": "services[0].check.commands",
     "only-if-days": "services[0].only_if[0].days",
+    "security-clamav-path": "services[0].check.path",
+    "security-threshold-comparator": "services[0].check.comparator",
+    "security-threshold-source": "services[0].check.source.type",
     "tcp-port": "services[0].check.port",
 }
 for path in invalid_paths:

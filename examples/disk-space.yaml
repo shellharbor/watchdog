@@ -1,0 +1,47 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+# Replace addresses and export the *_env secrets before enabling scheduled runs.
+# A failed check sends one alert to every enabled channel; recovery sends one more.
+settings:
+  log_file: /var/log/service-watchdog/service-watchdog.log
+  lock_file: /run/lock/service-watchdog.lock
+  state_directory: /var/lib/service-watchdog
+
+notifications:
+  email:
+    enabled: true
+    smtp:
+      url: smtps://smtp.example.com:465
+      from: watchdog@example.com
+      username: watchdog@example.com
+      password_env: WATCHDOG_SMTP_PASSWORD
+    recipients: [ops@example.com]
+    failure:
+      subject: "[watchdog] {{service}} is low on disk space"
+      body: "{{detail}}"
+    recovery:
+      subject: "[watchdog] {{service}} disk space recovered"
+      body: "{{detail}}"
+  webhooks:
+    telegram:
+      enabled: true
+      bot_token_env: WATCHDOG_TG_BOT_TOKEN
+      chat_id: "-1001234567890"
+    discord:
+      enabled: true
+      webhook_url_env: WATCHDOG_DISCORD_WEBHOOK_URL
+    slack:
+      enabled: true
+      webhook_url_env: WATCHDOG_SLACK_WEBHOOK_URL
+    ntfy:
+      enabled: true
+      url: https://ntfy.sh/replace-with-your-topic
+      token_env: WATCHDOG_NTFY_TOKEN
+
+services:
+  - name: root-disk-space
+    check:
+      type: disk
+      path: /
+      min_free_gb: 10
+      min_free_percent: 10
+      attempts: 1

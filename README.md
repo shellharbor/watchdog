@@ -24,11 +24,14 @@ cron, or another scheduler.
 - HTTP/HTTPS checks with redirects, timeouts, retries, and expected statuses
 - TCP port checks using Bash `/dev/tcp`
 - Arbitrary command checks
+- Opt-in disk-space checks with free GiB and percentage thresholds
+- Opt-in ClamAV and event-count threshold checks for security monitoring
 - Ordered remediation commands without `eval`
 - Per-service action cooldown
 - Optional persistent flapping guard and exponential action backoff
 - Dependency-ordered checks and separate liveness/readiness endpoints
 - Bounded incident history, expanded Prometheus textfile metrics, and opt-in action allowlist
+- Optional per-check history, uptime reports, and ASCII trends
 - Optional health verification after remediation
 - Failure and recovery hooks with environment variables
 - Built-in SMTP email alerts with YAML-configured templates and recipients
@@ -212,6 +215,83 @@ connection can be opened before the timeout.
 
 Required fields: `type: command` and `commands`. Commands run sequentially and
 the check fails on the first non-zero exit status.
+
+#### Disk space
+
+Use `type: disk` to monitor the filesystem containing an absolute `path`:
+
+```yaml
+services:
+  - name: root-disk-space
+    check:
+      type: disk
+      path: /
+      min_free_gb: 10
+      min_free_percent: 10
+      attempts: 1
+```
+
+Set at least one threshold. When both are set, the check fails if **either**
+minimum is missed. It measures available space with GNU `df`; a missing path
+or failed `df` call also fails the check. This monitors filesystem capacity,
+not drive hardware health (SMART). For a separately mounted volume, `df` can
+fall back to the parent filesystem if the mount disappears; add a separate
+`mountpoint` command check if mount loss must also trigger an alert. The disk
+check does not run remediation unless you explicitly configure
+`actions.commands`. The normal transition rules send one
+failure alert and one recovery alert through every enabled email/webhook
+channel; maintenance windows still suppress delivery. See
+[`examples/disk-space.yaml`](examples/disk-space.yaml) for all five channels.
+
+#### Security monitoring
+
+Security checks use the same state transitions and enabled global email/webhook
+channels as other services. A threshold check becomes `unavailable` when its
+comparison is true; a clean result returns to `healthy` and sends recovery
+notification. Scanner or source errors also fail the check rather than being
+mistaken for zero threats.
+
+| What to watch | Check | Source |
+| --- | --- | --- |
+| Uploaded files | `clamav` | `clamscan` on an absolute path |
+| SSH login failures | `threshold` | `journald` unit, `since`, and regex pattern |
+| SYN-flood socket count | `threshold` | `netstat` source using `ss`, or `netstat` fallback |
+| Nginx 444/429 bursts | `threshold` | `logfile` recent lines and regex pattern |
+| Custom detector | `threshold` | Direct argv `command`, returning a count or matching lines |
+
+```yaml
+services:
+  - name: ssh-bruteforce
+    check:
+      type: threshold
+      source:
+        type: journald
+        unit: sshd
+        since: "5 minutes ago"
+        pattern: "Failed password"
+      threshold: 10
+      comparator: ">"
+      attempts: 1
+```
+
+Comparators are `>`, `>=`, `<`, `<=`, `==`, and `!=`; the default is `>`.
+`logfile` reads the last `tail_lines` lines (default 10,000), which is only
+an approximation of a time window. Use `journald` for a true `--since` window.
+`clamav` defaults to a 300-second timeout and nonrecursive scanning; install
+ClamAV and refresh signatures with `freshclam` before enabling it. Watchdog
+only invokes the scanner; it does not install signatures or quarantine files.
+The optional `clamscan`, `journalctl`, and `ss`/`netstat` tools are required
+only when those checks are configured, and `validate` reports missing tools or
+unreadable paths with the config field name.
+
+Notification templates can use `{{node_id}}`, `{{match_count}}`,
+`{{threshold}}`, `{{comparator}}`, and `{{since}}` in addition to the existing
+variables. Hooks and actions receive `WATCHDOG_MATCH_COUNT`,
+`WATCHDOG_THRESHOLD`, `WATCHDOG_COMPARATOR`, and `WATCHDOG_SINCE` as environment
+variables; command argv items are **not** template-expanded. In particular,
+`{{attacker_ip}}` extraction and automatic bans are not implemented. Add a
+reviewed `actions.commands` rule if you want remediation. See
+[`examples/security-monitoring.yaml`](examples/security-monitoring.yaml).
 
 ### Remediation behavior
 
@@ -1106,6 +1186,54 @@ memory. Invalid config exits `2` without a partial table/JSON; otherwise it
 exits `0` only when every shown service is healthy, or `1` if any is not.
 See [`examples/status-cli.yaml`](examples/status-cli.yaml).
 
+### History & Trends
+
+Per-check history is opt-in and separate from the bounded incident ledger.
+Enable JSON Lines storage to append one snapshot after each completed service
+check (including parallel checks):
+
+```yaml
+history:
+  enabled: true
+  storage: jsonl
+  path: /var/lib/service-watchdog/history
+  rotation:
+    mode: daily
+    max_age_days: 30
+  reports:
+    trend_dots: 60
+```
+
+In `daily` mode, Watchdog creates `history_YYYY-MM-DD.jsonl` and removes old
+files automatically after the configured age. `single` mode uses
+`history.jsonl`; set `rotation.max_records` to cap its line count. Set either
+limit to `0` to disable that limit. JSONL needs no new dependency. For complex
+SQL analysis, set `storage: sqlite` and `path` to an absolute `.db` file;
+this optional mode requires the `sqlite3` CLI, checked by `validate`.
+`history.fields` can select stored columns, but must include `timestamp`,
+`service`, and `state` for reporting. The default stores all fields.
+
+Reports and trends validate the config and read history without running checks,
+acquiring the lock, or creating files:
+
+```text
+$ ./service-watchdog.sh --report daily -c config.yaml
+SERVICE | TOTAL | HEALTHY | UNAVAILABLE | UPTIME | FALLS | DOWNTIME
+api                       |    60 |      58 |           2 |  96.7% |     1 | 2m
+
+$ ./service-watchdog.sh --trend api -c config.yaml
+api [████████████████████░░████████] 93.3% (28/30)
+█ healthy  ░ unavailable/degraded/recovering
+Uptime: 93.3% | Falls: 1 | MTTR: 2m | Last fall: 2026-09-26T00:36:00+03:00 (2m)
+```
+
+`--report` supports `daily` (since local midnight), `weekly` (last seven days),
+and `monthly` (last 30 days). Uptime is the fraction of healthy snapshots,
+not a continuous-time availability SLA; downtime and MTTR use the intervals
+between sampled unavailability and recovery. Skipped checks and `--dry-run`
+do not add snapshots. See [`examples/history/`](examples/history) for a
+sample JSONL record.
+
 ## Usage and exit codes
 
 ```text
@@ -1114,6 +1242,8 @@ service-watchdog.sh --dry-run [-c FILE] [-s SERVICE]
 service-watchdog.sh validate -c FILE
 service-watchdog.sh notify-test [-c FILE] [-s SERVICE] [--channel email|telegram|discord|slack|ntfy|all] [--event failure|recovery|escalation]
 service-watchdog.sh status [-c FILE] [-s SERVICE] [--json] [--all]
+service-watchdog.sh --report daily|weekly|monthly [-c FILE]
+service-watchdog.sh --trend SERVICE [-c FILE]
 service-watchdog.sh -V | --version
 ```
 
@@ -1304,10 +1434,13 @@ enforce after reviewing actions.
 ## Testing
 
 ```bash
-bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/smoke.sh tests/discovery.sh tests/notify-test.sh tests/status-command.sh tests/schema.sh
+bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/smoke.sh tests/discovery.sh tests/disk-space.sh tests/history.sh tests/security.sh tests/notify-test.sh tests/status-command.sh tests/schema.sh
 bash -n tests/email-notifications.sh tests/webhooks.sh tests/maintenance.sh tests/escalation.sh tests/prometheus.sh tests/dependencies.sh tests/circuit-breaker.sh tests/status-page.sh tests/federation.sh tests/reliability.sh tests/health-policy.sh
 shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
 bash ./tests/schema.sh    # CI installs Python jsonschema; yq v4 is also required
+bash ./tests/disk-space.sh
+bash ./tests/history.sh
+bash ./tests/security.sh
 bash ./tests/discovery.sh
 bash ./tests/notify-test.sh
 bash ./tests/status-command.sh

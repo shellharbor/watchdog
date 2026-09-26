@@ -16,6 +16,7 @@
     "federation": { "$ref": "#/$defs/federation", "description": "Optional one-shot agent or hub mode." },
     "metrics": { "$ref": "#/$defs/metrics", "description": "Prometheus textfile collector output." },
     "status_page": { "$ref": "#/$defs/statusPage", "description": "Static HTML and JSON status page output." },
+    "history": { "$ref": "#/$defs/history", "description": "Optional per-check snapshots, rotation and terminal reports." },
     "discovery": { "$ref": "#/$defs/discovery", "description": "Optional offline draft generator settings, read by watchdog-discover.sh rather than the monitor." }
   },
   "if": { "properties": { "federation": { "properties": { "hub": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["hub"] } }, "required": ["federation"] },
@@ -57,9 +58,9 @@
       }, "additionalProperties": false
     },
     "checkFields": {
-      "type": "object", "description": "HTTP, TCP or direct command check. Partial fields are allowed when inherited from a template.",
+      "type": "object", "description": "HTTP, TCP, direct command, disk-space or security check. Partial fields are allowed when inherited from a template.",
       "properties": {
-        "type": { "type": "string", "enum": ["http", "tcp", "command"], "description": "Check transport." },
+        "type": { "type": "string", "enum": ["http", "tcp", "command", "disk", "clamav", "threshold"], "description": "Check transport, filesystem, antivirus, or threshold source." },
         "url": { "type": "string", "pattern": "^https?://\\S+$", "description": "HTTP(S) health endpoint." },
         "method": { "type": "string", "enum": ["GET", "HEAD"], "default": "GET", "description": "HTTP request method." },
         "follow_redirects": { "type": "boolean", "default": true, "description": "Follow HTTP redirects." },
@@ -67,10 +68,37 @@
         "host": { "type": "string", "minLength": 1, "pattern": "^\\S+$", "description": "TCP host name or address." },
         "port": { "$ref": "#/$defs/port", "description": "TCP destination port." },
         "commands": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/commandStep" }, "description": "Commands whose exit status determines health." },
-        "timeout": { "$ref": "#/$defs/positiveInteger", "default": 10, "description": "Per-attempt timeout in seconds; defaults to settings.default_timeout." },
+        "path": { "$ref": "#/$defs/absolutePath", "description": "Absolute file or directory path on the filesystem to measure with df." },
+        "min_free_gb": { "$ref": "#/$defs/nonNegativeNumber", "description": "Minimum available space in GiB; disk check fails below this threshold." },
+        "min_free_percent": { "type": "number", "minimum": 0, "maximum": 100, "description": "Minimum available percentage; disk check fails below this threshold." },
+        "recursive": { "type": "boolean", "default": false, "description": "Run clamscan recursively when true." },
+        "source": { "$ref": "#/$defs/thresholdSource", "description": "Event or socket source for a threshold check." },
+        "threshold": { "type": "number", "minimum": 0, "description": "Non-negative count threshold that triggers a failure when comparator is true." },
+        "comparator": { "type": "string", "enum": [">", ">=", "<", "<=", "==", "!="], "default": ">", "description": "Comparison between observed count and threshold." },
+        "timeout": { "$ref": "#/$defs/positiveInteger", "description": "Per-attempt timeout in seconds; defaults to settings.default_timeout, or 300 seconds for clamav." },
         "attempts": { "$ref": "#/$defs/positiveInteger", "default": 2, "description": "Check attempts; defaults to settings.default_attempts." },
         "retry_delay": { "$ref": "#/$defs/nonNegativeInteger", "default": 2, "description": "Seconds between attempts; defaults to settings.default_retry_delay." }
       }, "additionalProperties": false
+    },
+    "thresholdSource": {
+      "type": "object", "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["journald", "logfile", "netstat", "command"], "description": "How to collect a count." },
+        "unit": { "type": "string", "minLength": 1, "description": "journald systemd unit name." },
+        "since": { "type": "string", "minLength": 1, "description": "journald --since interval, such as 5 minutes ago." },
+        "pattern": { "type": "string", "minLength": 1, "description": "Extended regular expression used to count matching lines." },
+        "path": { "$ref": "#/$defs/absolutePath", "description": "Readable log file path." },
+        "tail_lines": { "type": "integer", "minimum": 1, "maximum": 1000000, "default": 10000, "description": "How many recent log lines to inspect; not a precise time window." },
+        "state": { "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$", "description": "TCP state such as SYN-RECV." },
+        "command": { "$ref": "#/$defs/argv", "description": "Command whose output is a count or contains lines matching pattern." },
+        "timeout": { "$ref": "#/$defs/positiveInteger", "description": "Timeout for a command source, overriding check.timeout." }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "journald" } } }, "then": { "required": ["unit", "since", "pattern"] } },
+        { "if": { "properties": { "type": { "const": "logfile" } } }, "then": { "required": ["path", "pattern"] } },
+        { "if": { "properties": { "type": { "const": "netstat" } } }, "then": { "oneOf": [{ "required": ["state"], "not": { "required": ["pattern"] } }, { "required": ["pattern"], "not": { "required": ["state"] } }] } },
+        { "if": { "properties": { "type": { "const": "command" } } }, "then": { "required": ["command"] } }
+      ], "additionalProperties": false
     },
     "check": {
       "allOf": [
@@ -78,7 +106,10 @@
         { "required": ["type"] },
         { "if": { "properties": { "type": { "const": "http" } }, "required": ["type"] }, "then": { "required": ["url"] } },
         { "if": { "properties": { "type": { "const": "tcp" } }, "required": ["type"] }, "then": { "required": ["host", "port"] } },
-        { "if": { "properties": { "type": { "const": "command" } }, "required": ["type"] }, "then": { "required": ["commands"] } }
+        { "if": { "properties": { "type": { "const": "command" } }, "required": ["type"] }, "then": { "required": ["commands"] } },
+        { "if": { "properties": { "type": { "const": "disk" } }, "required": ["type"] }, "then": { "required": ["path"], "anyOf": [{ "required": ["min_free_gb"] }, { "required": ["min_free_percent"] }] } },
+        { "if": { "properties": { "type": { "const": "clamav" } }, "required": ["type"] }, "then": { "required": ["path"] } },
+        { "if": { "properties": { "type": { "const": "threshold" } }, "required": ["type"] }, "then": { "required": ["source", "threshold"] } }
       ], "description": "Complete check definition after template expansion."
     },
     "partialHealth": {
@@ -359,6 +390,20 @@
         "templates": { "$ref": "#/$defs/federationTemplates", "description": "Hub notification templates." }
       }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["incoming_dir", "archive_dir"] }, "additionalProperties": false }
     }, "allOf": [{ "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "not": { "properties": { "agent": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "hub": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["agent", "hub"] } } }], "additionalProperties": false },
+    "history": { "type": "object", "properties": {
+      "enabled": { "type": "boolean", "default": false, "description": "Record one snapshot per completed service check; disabled by default." },
+      "storage": { "type": "string", "enum": ["jsonl", "sqlite"], "default": "jsonl", "description": "JSON Lines needs no extra dependency; SQLite requires the optional sqlite3 CLI." },
+      "path": { "$ref": "#/$defs/absolutePath", "description": "JSONL directory or SQLite database file. Defaults inside settings.state_directory." },
+      "rotation": { "type": "object", "properties": {
+        "mode": { "type": "string", "enum": ["daily", "single"], "default": "daily", "description": "Daily JSONL files or one rolling JSONL file; ignored for SQLite." },
+        "max_age_days": { "$ref": "#/$defs/nonNegativeInteger", "default": 30, "description": "Delete old daily files or SQLite rows after this many days; 0 disables age cleanup." },
+        "max_records": { "$ref": "#/$defs/nonNegativeInteger", "default": 0, "description": "Retain at most this many JSONL lines in single mode; 0 means unlimited." }
+      }, "additionalProperties": false },
+      "fields": { "type": "array", "uniqueItems": true, "minItems": 3, "allOf": [{ "contains": { "const": "timestamp" } }, { "contains": { "const": "service" } }, { "contains": { "const": "state" } }], "items": { "type": "string", "enum": ["timestamp", "node_id", "service", "state", "check_type", "detail", "http_status", "check_exit", "action_status", "duration_sec"] }, "description": "Stored fields. timestamp, service and state are required for reports; all fields are stored by default." },
+      "reports": { "type": "object", "properties": {
+        "trend_dots": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 1000 }, { "type": "string", "pattern": "^0*(?:[1-9]|[1-9][0-9]{1,2}|1000)$" }], "default": 60, "description": "Maximum check snapshots displayed by --trend." }
+      }, "additionalProperties": false }
+    }, "additionalProperties": false },
     "discovery": { "type": "object", "properties": {
       "enabled": { "type": "boolean", "default": false, "description": "Enable the separately invoked offline generator." },
       "output_dir": { "type": "string", "pattern": "^(?:$|/)", "default": "", "description": "Output directory; empty writes to stdout." },

@@ -9,6 +9,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Opt-in `clamav` scanning and `threshold` checks for journald, log files,
+  socket states, and direct count commands, with template and hook variables.
+- Security-check regression tests and a worked configuration example.
+- Opt-in per-check history in JSONL or optional SQLite storage, with daily or
+  single-file retention and read-only `--report` / `--trend` terminal views.
+- History and trend regression coverage in CI, plus a configuration example.
+- Opt-in `disk` health checks for filesystem free space, with GiB and percent
+  thresholds and the existing failure/recovery notification channels.
+- Disk-space regression coverage and an all-channel configuration example.
 - Draft 2020-12 JSON Schema for the monitor configuration, with editor
   annotations in the example YAML files and CI checks for valid and invalid
   configurations.
@@ -17,6 +26,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Read-only `status` command with terminal and JSON summaries, maintenance and
   remediation-block visibility, and optional orphaned state files.
 - Regression tests for both commands in GitHub Actions.
+
+### Fixed
+
+- Filesystem `only_if` conditions now compare the actual free-space percentage
+  instead of the used-space percentage reported by `df`.
 
 ## [1.0.6] - 2026-08-15
 

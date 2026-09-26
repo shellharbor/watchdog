@@ -9,6 +9,9 @@ service names, and commands before enabling scheduled runs.
 | [`http-docker-compose.yaml`](http-docker-compose.yaml) | Check an HTTP health endpoint and restart Docker Compose services |
 | [`tcp-systemd.yaml`](tcp-systemd.yaml) | Check a TCP port and restart a systemd unit |
 | [`command-check.yaml`](command-check.yaml) | Use a local command as the health check |
+| [`disk-space.yaml`](disk-space.yaml) | Alert through email and webhooks when a filesystem runs low on free space |
+| [`security-monitoring.yaml`](security-monitoring.yaml) | ClamAV and threshold alerts for SSH, TCP socket states, and web logs |
+| [`history/`](history) | Sample JSONL history snapshot and report input |
 | [`multiple-services.yaml`](multiple-services.yaml) | Monitor HTTP, TCP, and systemd services in one run |
 | [`hooks.yaml`](hooks.yaml) | Run notification hooks on failure and recovery transitions |
 | [`smtp-email.yaml`](smtp-email.yaml) | Send built-in SMTP email on failure and recovery transitions |
