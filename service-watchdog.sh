@@ -4536,7 +4536,7 @@ generate_report() {
 }
 
 generate_trend() {
-    local service_name="$1" row timestamp state epoch timeline='' total=0 healthy=0 falls=0 previous='' down_start='' down_total=0 completed=0 last_fall='' last_duration='' now percent mttr
+    local service_name="$1" row timestamp state epoch timeline='' trend_total=0 trend_healthy=0 trend_falls=0 trend_previous='' trend_down_start='' trend_down_total=0 trend_completed=0 last_fall='' last_duration='' now percent mttr
     local -a rows=()
     history_check_reader
     [[ "$service_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die 'trend service must be a valid service name.'
@@ -4545,34 +4545,34 @@ generate_trend() {
     for row in "${rows[@]}"; do
         IFS=$'\t' read -r timestamp _ state <<<"$row"
         epoch="$(date -d "$timestamp" '+%s' 2>/dev/null)" || continue
-        total=$((total + 1))
-        if [[ "$state" == healthy ]]; then timeline+='█'; healthy=$((healthy + 1)); else timeline+='░'; fi
-        if [[ "$state" == unavailable && -z "$down_start" ]]; then
-            [[ "$previous" != healthy ]] || falls=$((falls + 1))
-            down_start="$epoch"; last_fall="$timestamp"; last_duration='ongoing'
-        elif [[ "$state" == healthy && -n "$down_start" ]]; then
-            last_duration=$((epoch - down_start))
-            down_total=$((down_total + last_duration))
-            completed=$((completed + 1))
-            down_start=''
+        trend_total=$((trend_total + 1))
+        if [[ "$state" == healthy ]]; then timeline+='█'; trend_healthy=$((trend_healthy + 1)); else timeline+='░'; fi
+        if [[ "$state" == unavailable && -z "$trend_down_start" ]]; then
+            [[ "$trend_previous" != healthy ]] || trend_falls=$((trend_falls + 1))
+            trend_down_start="$epoch"; last_fall="$timestamp"; last_duration='ongoing'
+        elif [[ "$state" == healthy && -n "$trend_down_start" ]]; then
+            last_duration=$((epoch - trend_down_start))
+            trend_down_total=$((trend_down_total + last_duration))
+            trend_completed=$((trend_completed + 1))
+            trend_down_start=''
         fi
-        previous="$state"
+        trend_previous="$state"
     done
-    if (( total == 0 )); then
+    if (( trend_total == 0 )); then
         printf '%s: no history records\n' "$service_name"
         bootstrap_log INFO "trend=generated service=${service_name} dots=0 uptime=n/a"
         return 0
     fi
-    percent="$(awk -v ok="$healthy" -v all="$total" 'BEGIN { printf "%.1f", 100*ok/all }')"
-    if (( completed > 0 )); then mttr="$(status_duration "$((down_total / completed))")"; else mttr='n/a'; fi
-    if [[ -n "$down_start" ]]; then last_duration=$((now - down_start)); fi
+    percent="$(awk -v ok="$trend_healthy" -v all="$trend_total" 'BEGIN { printf "%.1f", 100*ok/all }')"
+    if (( trend_completed > 0 )); then mttr="$(status_duration "$((trend_down_total / trend_completed))")"; else mttr='n/a'; fi
+    if [[ -n "$trend_down_start" ]]; then last_duration=$((now - trend_down_start)); fi
     [[ "$last_duration" != '' && "$last_duration" != ongoing ]] && last_duration="$(status_duration "$last_duration")"
     [[ -n "$last_fall" ]] || last_fall='n/a'
     [[ -n "$last_duration" ]] || last_duration='n/a'
-    printf '%s [%s] %s%% (%s/%s)\n' "$service_name" "$timeline" "$percent" "$healthy" "$total"
+    printf '%s [%s] %s%% (%s/%s)\n' "$service_name" "$timeline" "$percent" "$trend_healthy" "$trend_total"
     printf '█ healthy  ░ unavailable/degraded/recovering\n'
-    printf 'Uptime: %s%% | Falls: %s | MTTR: %s | Last fall: %s (%s)\n' "$percent" "$falls" "$mttr" "$last_fall" "$last_duration"
-    bootstrap_log INFO "trend=generated service=${service_name} dots=${total} uptime=${percent}%"
+    printf 'Uptime: %s%% | Falls: %s | MTTR: %s | Last fall: %s (%s)\n' "$percent" "$trend_falls" "$mttr" "$last_fall" "$last_duration"
+    bootstrap_log INFO "trend=generated service=${service_name} dots=${trend_total} uptime=${percent}%"
 }
 
 notify_test_run() {

@@ -46,7 +46,7 @@ export PATH="$TEST_DIR/bin:$PATH"
 export SECURITY_CLAM_ARGS="$TEST_DIR/clam-args"
 export SECURITY_HOOK_LOG="$TEST_DIR/hooks"
 export SECURITY_MODE=high
-printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}' '$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*' >"$TEST_DIR/uploads/test.txt"
+printf '%s' 'X5O!P%@AP[4\PZX54(P^)7CC)7}' "\$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!\$H+H*" >"$TEST_DIR/uploads/test.txt"
 for ((i = 0; i < 15; i++)); do printf '192.0.2.10 - - "GET / HTTP/1.1" 444 0\n'; done >"$TEST_DIR/access.log"
 
 cat >"$TEST_DIR/config.yaml" <<YAML
