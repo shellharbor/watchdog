@@ -34,6 +34,23 @@ projects.
   must verify `openssl` only when enabled, pass host and SNI as separate argv
   values, and expose expiry context without logging or persisting certificate
   contents.
+- `dns` and `ping` are optional network checks backed by `dig` and Linux
+  `ping`, respectively. Validate those tools only for services that select the
+  corresponding type; preserve exact DNS answer matching and bounded ICMP loss
+  and RTT semantics.
+- PagerDuty and Opsgenie are on-call notification channels. They must use the
+  Watchdog incident ID as their deduplication key/alias, trigger on failure or
+  escalation, resolve only on recovery, and keep credentials and JSON payloads
+  out of logs and curl argv.
+- `actions.http` is first-class remote remediation, not a shell escape hatch.
+  It shares all ordinary remediation guards and in enforce mode must match an
+  exact `security.remediation_policy.allowed_http` method/URL entry. Header and
+  body secrets use `*_env` and private temporary files.
+- `action.yml` is the public Docker Action for CI configuration validation. It
+  must invoke only `validate`, keep its config path inside `GITHUB_WORKSPACE`,
+  and exit with Watchdog's normal validation status. Keep its image dependencies
+  sufficient for every optional check type and cover its valid and invalid
+  behavior through `tests/github-action.sh --docker` in CI.
 - `status_page.uptime` is opt-in and requires `history.enabled: true`. It
   renders only sampled, observed availability from history: preserve grey
   intervals when no record exists and never present the bars as an SLA.
@@ -86,7 +103,8 @@ configuration/schema test and broader regression coverage:
 ```bash
 bash ./scripts/build-watchdog.sh --check
 bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh
-shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh tests/*.sh
+bash -n scripts/github-action-entrypoint.sh
+shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh scripts/github-action-entrypoint.sh tests/*.sh
 bash ./tests/versioning.sh
 bash ./tests/run-all.sh
 ```

@@ -12,8 +12,9 @@ settings:
 
 # Existing installations remain in legacy mode. To enforce a command policy,
 # change mode to enforce and list the exact absolute executable + argument
-# vectors used by every remediation and escalation action (see the Market Data
-# example). Checks and hooks have a separate trust boundary.
+# vectors and/or exact HTTP method + URL pairs used by remediation (see the
+# Market Data and remote HTTP remediation examples). Checks and hooks have a
+# separate trust boundary.
 security:
   remediation_policy:
     mode: legacy
@@ -245,6 +246,18 @@ notifications:
         failure: "🚨 {{service}} unavailable: {{detail}}"
         recovery: "✅ {{service}} recovered"
 
+    # PagerDuty sends failure/escalation triggers and resolves the same event
+    # on recovery. The incident ID is the provider's deduplication key.
+    pagerduty:
+      enabled: false
+      routing_key_env: WATCHDOG_PAGERDUTY_ROUTING_KEY
+
+    # Opsgenie uses its Alert API. Choose eu for api.eu.opsgenie.com.
+    opsgenie:
+      enabled: false
+      api_key_env: WATCHDOG_OPSGENIE_API_KEY
+      region: us
+
 # Optional commands invoked only when a service changes state. Every command
 # receives WATCHDOG_SERVICE, WATCHDOG_EVENT, WATCHDOG_DETAIL,
 # WATCHDOG_CHECK_TYPE, WATCHDOG_HTTP_STATUS, and WATCHDOG_CHECK_EXIT.
@@ -327,6 +340,23 @@ services:
   #     source: {type: logfile, path: /var/log/nginx/access.log, pattern: " 444 ", tail_lines: 10000}
   #     threshold: 1000
 
+  # Network check examples need optional tools only on hosts that use them:
+  # `dig` for DNS and the Linux `ping` utility for ICMP.
+  # - name: public-api-dns
+  #   check:
+  #     type: dns
+  #     name: api.example.com
+  #     record_type: A
+  #     resolver: 1.1.1.1
+  #     expected_answers: [203.0.113.42]
+  # - name: upstream-router
+  #   check:
+  #     type: ping
+  #     host: 192.0.2.1
+  #     count: 3
+  #     max_packet_loss_percent: 0
+  #     max_avg_rtt_ms: 50
+
   - name: example-website
     template: default_http
     # Set false to keep this individual check out of a parallel batch.
@@ -355,6 +385,15 @@ services:
             - web
           # working_directory: /srv/example  # Enable after creating this path.
           timeout: 120
+      # Remote API remediation runs after local commands. Enable enforce mode
+      # and add this exact method + URL to security.remediation_policy.allowed_http.
+      # http:
+      #   - method: POST
+      #     url: https://portainer.example.com/api/restart
+      #     headers:
+      #       - name: Authorization
+      #         value_env: WATCHDOG_REMOTE_API_TOKEN
+      #     success_status: [202, 204]
 
     # After three state changes in five minutes, pause automatic remediation
     # for at least ten minutes and require two minutes of stable health.

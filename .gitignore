@@ -91,6 +91,7 @@ release/
 .cursor/
 scripts/*
 !scripts/build-watchdog.sh
+!scripts/github-action-entrypoint.sh
 .windsurfrules
 AGENTS.md
 AI_CONTEXT.md

@@ -2,8 +2,8 @@
 
 Each service has either one `check` or HTTP `health.liveness` and
 `health.readiness` checks. A check can retry before it is considered failed.
-The available `check.type` values are `http`, `tcp`, `command`, `disk`,
-`tls_cert`, `clamav`, and `threshold`.
+The available `check.type` values are `http`, `tcp`, `dns`, `ping`, `command`,
+`disk`, `tls_cert`, `clamav`, and `threshold`.
 
 ## HTTP and HTTPS
 
@@ -90,6 +90,49 @@ services:
 A successful TCP connection proves reachability, not application-level
 readiness. Pair it with an HTTP or command check where protocol-level health is
 important.
+
+## DNS records
+
+The optional `dns` check invokes `dig +short`. It supports `A`, `AAAA`,
+`CNAME`, `MX`, `NS`, and `TXT` records. `expected_answers` compares exact
+non-empty output lines; this detects a wrong A record or missing mail exchanger
+rather than merely testing that a resolver responds.
+
+```yaml
+services:
+  - name: public-api-dns
+    check:
+      type: dns
+      name: api.example.com
+      record_type: A
+      resolver: 1.1.1.1
+      min_answers: 1
+      expected_answers: [203.0.113.42]
+```
+
+Install `dig` only on hosts using this type. `validate` returns exit code `2`
+when it is missing. For CNAME, MX, NS, and TXT, copy the expected value exactly
+as `dig +short` prints it.
+
+## ICMP reachability
+
+The optional Linux `ping` check tests basic host reachability. Its default
+`max_packet_loss_percent: 0` treats even partial loss as a failure; set
+`max_avg_rtt_ms` when latency is also operationally meaningful.
+
+```yaml
+services:
+  - name: upstream-router
+    check:
+      type: ping
+      host: 192.0.2.1
+      count: 3
+      max_packet_loss_percent: 0
+      max_avg_rtt_ms: 50
+```
+
+Some healthy firewalls intentionally drop ICMP. Use TCP or HTTP checks when the
+service contract, rather than host reachability, is what matters.
 
 ## Command checks
 
@@ -284,6 +327,8 @@ and bounded by a timeout.
 | --- | --- |
 | Endpoint can serve a health response | `http` |
 | Only a socket must be reachable | `tcp` |
+| A DNS record must have a known answer | `dns` |
+| A host must reply to ICMP | `ping` |
 | A local program already knows health | `command` |
 | A filesystem is close to full | `disk` |
 | A TLS certificate is nearing expiry | `tls_cert` |

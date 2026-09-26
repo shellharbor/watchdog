@@ -11,6 +11,7 @@ service names, and commands before enabling scheduled runs.
 | [`tcp-systemd.yaml`](tcp-systemd.yaml) | Check a TCP port and restart a systemd unit |
 | [`command-check.yaml`](command-check.yaml) | Use a local command as the health check |
 | [`disk-space.yaml`](disk-space.yaml) | Alert through email and webhooks when a filesystem runs low on free space |
+| [`dns-ping.yaml`](dns-ping.yaml) | Verify authoritative DNS answers and ICMP packet loss/latency |
 | [`tls-certificate.yaml`](tls-certificate.yaml) | Alert before a TLS leaf certificate expires, with optional SNI and port |
 | [`security-monitoring.yaml`](security-monitoring.yaml) | ClamAV and threshold alerts for SSH, TCP socket states, and web logs |
 | [`history/`](history) | Sample JSONL history snapshot and report input |
@@ -23,6 +24,8 @@ service names, and commands before enabling scheduled runs.
 | [`notify-test.yaml`](notify-test.yaml) | Test notification delivery explicitly after filling in SMTP settings and secrets |
 | [`status-cli.yaml`](status-cli.yaml) | Read a service's persisted state with the terminal `status` command |
 | [`status-page-uptime.yaml`](status-page-uptime.yaml) | Publish a static status page with 30 days of observed-availability bars |
+| [`oncall-notifications.yaml`](oncall-notifications.yaml) | Open and resolve deduplicated PagerDuty and Opsgenie alerts |
+| [`remote-http-remediation.yaml`](remote-http-remediation.yaml) | Invoke an allowlisted remote API safely as remediation |
 
 Validate YAML and policy without running any checks or creating runtime state:
 

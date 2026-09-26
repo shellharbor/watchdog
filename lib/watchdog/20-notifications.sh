@@ -333,6 +333,9 @@ webhook_template() {
         ntfy:circuit_open) fallback='⚠️ CIRCUIT BREAKER OPEN: {{service}}' ;;
         ntfy:circuit_close) fallback='✅ CIRCUIT BREAKER CLOSED: {{service}}' ;;
         ntfy:flapping) fallback='⚠️ FLAPPING: {{service}} is unstable; automatic remediation paused.' ;;
+        pagerduty:failure|opsgenie:failure) fallback='{{service}} unavailable: {{detail}}' ;;
+        pagerduty:recovery|opsgenie:recovery) fallback='{{service}} recovered after {{incident_duration_seconds}}s ({{remediation_result}})' ;;
+        pagerduty:escalation|opsgenie:escalation) fallback='ESCALATION: {{service}} has been unavailable for {{consecutive_unavailable}} consecutive checks.' ;;
         *) return 1 ;;
     esac
     value_type="$(yaml_read ".notifications.webhooks.${webhook}.template.${event} | type")"
@@ -344,15 +347,27 @@ webhook_template() {
     printf '%s' "$value"
 }
 
+oncall_incident_key() {
+    local incident_id="$INCIDENT_ID"
+    [[ -n "$incident_id" ]] || incident_id="${CURRENT_SERVICE}-untracked"
+    printf 'watchdog-%s' "$incident_id"
+}
+
+oncall_provider_handles_event() {
+    case "$1" in failure|recovery|escalation) return 0 ;; *) return 1 ;; esac
+}
+
 send_single_webhook() {
     local webhook="$1" event="$2" env_name="" secret="" url="" template text timestamp
-    local response_file response http_status curl_status thread_id priority error_file error_text
+    local response_file response http_status curl_status thread_id priority error_file error_text payload_file='' secret_config=''
     local -a curl_command
 
     case "$webhook" in
         telegram) env_name="$(yaml_read '.notifications.webhooks.telegram.bot_token_env')" ;;
         discord|slack) env_name="$(yaml_read ".notifications.webhooks.${webhook}.webhook_url_env")" ;;
         ntfy) env_name="$(yaml_read '.notifications.webhooks.ntfy.token_env // ""')" ;;
+        pagerduty) env_name="$(yaml_read '.notifications.webhooks.pagerduty.routing_key_env')" ;;
+        opsgenie) env_name="$(yaml_read '.notifications.webhooks.opsgenie.api_key_env')" ;;
     esac
     if [[ -n "$env_name" ]]; then
         secret="${!env_name:-}"
@@ -412,6 +427,76 @@ send_single_webhook() {
             fi
             [[ -z "$secret" ]] || curl_command+=(--header "Authorization: Bearer ${secret}")
             ;;
+        pagerduty)
+            text="$(render_webhook_template plain "$template" "$event" "$timestamp")"
+            (( NOTIFY_TEST_MODE == 0 )) || text="[TEST] ${text}"
+            url='https://events.pagerduty.com/v2/enqueue'
+            case "$event" in
+                recovery)
+                    text="$(printf '{"routing_key":"%s","event_action":"resolve","dedup_key":"%s"}' \
+                        "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")")"
+                    ;;
+                escalation)
+                    text="$(printf '{"routing_key":"%s","event_action":"trigger","dedup_key":"%s","payload":{"summary":"%s","source":"%s","severity":"critical"}}' \
+                        "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")" "$(escape_json "$CURRENT_SERVICE")")"
+                    ;;
+                *)
+                    text="$(printf '{"routing_key":"%s","event_action":"trigger","dedup_key":"%s","payload":{"summary":"%s","source":"%s","severity":"error"}}' \
+                        "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")" "$(escape_json "$CURRENT_SERVICE")")"
+                    ;;
+            esac
+            payload_file="$(mktemp "${TEMP_DIRECTORY}/pagerduty-payload.XXXXXX")" || {
+                log ERROR "service=${CURRENT_SERVICE} webhook=pagerduty result=webhook-failed reason=payload-file-create event=${event}"
+                return 1
+            }
+            chmod 0600 "$payload_file" 2>/dev/null || true
+            if ! printf '%s' "$text" >"$payload_file"; then
+                rm -f -- "$payload_file"
+                log ERROR "service=${CURRENT_SERVICE} webhook=pagerduty result=webhook-failed reason=payload-file-write event=${event}"
+                return 1
+            fi
+            curl_command+=(--request POST --header 'Content-Type: application/json' --data-binary "@${payload_file}")
+            ;;
+        opsgenie)
+            text="$(render_webhook_template plain "$template" "$event" "$timestamp")"
+            (( NOTIFY_TEST_MODE == 0 )) || text="[TEST] ${text}"
+            if [[ "$(yaml_read '.notifications.webhooks.opsgenie.region // "us"')" == eu ]]; then
+                url='https://api.eu.opsgenie.com/v2/alerts'
+            else
+                url='https://api.opsgenie.com/v2/alerts'
+            fi
+            case "$event" in
+                recovery)
+                    url+="/$(oncall_incident_key)/close?identifierType=alias"
+                    text="$(printf '{"source":"watchdog","note":"%s"}' "$(escape_json "$text")")"
+                    ;;
+                escalation)
+                    text="$(printf '{"message":"%s","alias":"%s","description":"%s","priority":"P1","source":"watchdog"}' \
+                        "$(escape_json "${text:0:130}")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")")"
+                    ;;
+                *)
+                    text="$(printf '{"message":"%s","alias":"%s","description":"%s","priority":"P2","source":"watchdog"}' \
+                        "$(escape_json "${text:0:130}")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")")"
+                    ;;
+            esac
+            payload_file="$(mktemp "${TEMP_DIRECTORY}/opsgenie-payload.XXXXXX")" || {
+                log ERROR "service=${CURRENT_SERVICE} webhook=opsgenie result=webhook-failed reason=payload-file-create event=${event}"
+                return 1
+            }
+            secret_config="$(mktemp "${TEMP_DIRECTORY}/opsgenie-auth.XXXXXX")" || {
+                rm -f -- "$payload_file"
+                log ERROR "service=${CURRENT_SERVICE} webhook=opsgenie result=webhook-failed reason=auth-file-create event=${event}"
+                return 1
+            }
+            chmod 0600 "$payload_file" "$secret_config" 2>/dev/null || true
+            if ! printf '%s' "$text" >"$payload_file" ||
+                ! printf 'header = "%s"\n' "$(escape_curl_config_value "Authorization: GenieKey ${secret}")" >"$secret_config"; then
+                rm -f -- "$payload_file" "$secret_config"
+                log ERROR "service=${CURRENT_SERVICE} webhook=opsgenie result=webhook-failed reason=request-file-write event=${event}"
+                return 1
+            fi
+            curl_command+=(--request POST --header 'Content-Type: application/json' --config "$secret_config" --data-binary "@${payload_file}")
+            ;;
     esac
 
     if (( NOTIFY_TEST_MODE == 1 )); then
@@ -425,6 +510,7 @@ send_single_webhook() {
     error_text=""; [[ -z "${error_file:-}" || ! -s "$error_file" ]] || error_text="$(<"$error_file")"
     rm -f -- "$response_file"
     [[ -z "${error_file:-}" ]] || rm -f -- "$error_file"
+    rm -f -- "$payload_file" "$secret_config"
     if (( curl_status == 0 )) && [[ "$http_status" =~ ^2[0-9][0-9]$ ]]; then
         if [[ "$webhook" != telegram || "$response" =~ \"ok\"[[:space:]]*:[[:space:]]*true ]]; then
             if (( NOTIFY_TEST_MODE == 1 )); then
@@ -452,9 +538,10 @@ send_single_webhook() {
 
 send_webhook_notification() {
     local event="$1" webhook enabled failed=0
-    for webhook in telegram discord slack ntfy; do
+    for webhook in telegram discord slack ntfy pagerduty opsgenie; do
         enabled="$(yaml_read ".notifications.webhooks.${webhook}.enabled // false")"
         [[ "$enabled" == true ]] || continue
+        oncall_provider_handles_event "$event" || [[ "$webhook" != pagerduty && "$webhook" != opsgenie ]] || continue
         send_single_webhook "$webhook" "$event" || failed=1
     done
     return "$failed"
@@ -463,8 +550,9 @@ send_webhook_notification() {
 log_notification_plan() {
     local service_name="$1" event="$2" webhook
     (( EMAIL_ENABLED == 0 )) || log INFO "service=${service_name} action=email result=would-send event=${event}"
-    for webhook in telegram discord slack ntfy; do
+    for webhook in telegram discord slack ntfy pagerduty opsgenie; do
         if [[ "$(yaml_read ".notifications.webhooks.${webhook}.enabled // false")" == true ]]; then
+            oncall_provider_handles_event "$event" || [[ "$webhook" != pagerduty && "$webhook" != opsgenie ]] || continue
             log INFO "service=${service_name} action=webhook result=would-send provider=${webhook} event=${event}"
         fi
     done
@@ -603,4 +691,3 @@ send_email_notification() {
     fi
     send_email_message "$event" "$subject" "$body"
 }
-

@@ -1,0 +1,17 @@
+name: Watchdog configuration validation
+description: Validate a ShellHarbor Watchdog YAML configuration without running checks or changing runtime state.
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  config:
+    description: Path to the Watchdog YAML configuration relative to the checked-out workspace.
+    required: false
+    default: config.yaml
+
+runs:
+  using: docker
+  image: Dockerfile
+  args:
+    - ${{ inputs.config }}

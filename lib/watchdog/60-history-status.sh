@@ -295,7 +295,7 @@ notify_test_run() {
     fi
 
     printf 'CHANNEL | RESULT | DETAIL\n'
-    for channel in email telegram discord slack ntfy; do
+    for channel in email telegram discord slack ntfy pagerduty opsgenie; do
         [[ "$NOTIFY_TEST_CHANNEL" == all || "$NOTIFY_TEST_CHANNEL" == "$channel" ]] || continue
         if [[ "$channel" == email ]]; then
             enabled="$(yaml_read '.notifications.email.enabled // false')"
@@ -461,4 +461,3 @@ status_run() {
     if (( STATUS_JSON == 1 )); then printf '\n]\n'; fi
     return "$STATUS_UNHEALTHY"
 }
-

@@ -1,0 +1,10 @@
+settings:
+  log_file: /tmp/watchdog-schema-test.log
+  lock_file: /tmp/watchdog-schema-test.lock
+  state_directory: /tmp/watchdog-schema-test-state
+services:
+  - name: dns
+    check:
+      type: dns
+      name: api.example.test
+      record_type: SRV

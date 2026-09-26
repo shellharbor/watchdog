@@ -1,0 +1,14 @@
+settings:
+  log_file: /tmp/watchdog-schema-test.log
+  lock_file: /tmp/watchdog-schema-test.lock
+  state_directory: /tmp/watchdog-schema-test-state
+services:
+  - name: api
+    check:
+      type: command
+      commands:
+        - command: [true]
+    actions:
+      http:
+        - method: GET
+          url: https://example.test/restart

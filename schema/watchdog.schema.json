@@ -84,9 +84,9 @@
       "additionalProperties": false
     },
     "checkFields": {
-      "type": "object", "description": "HTTP, TCP, direct command, disk-space, TLS certificate, or security check. Partial fields are allowed when inherited from a template.",
+      "type": "object", "description": "HTTP, TCP, DNS, ICMP ping, direct command, disk-space, TLS certificate, or security check. Partial fields are allowed when inherited from a template.",
       "properties": {
-        "type": { "type": "string", "enum": ["http", "tcp", "command", "disk", "tls_cert", "clamav", "threshold"], "description": "Check transport, filesystem, TLS certificate expiry, antivirus, or threshold source." },
+        "type": { "type": "string", "enum": ["http", "tcp", "dns", "ping", "command", "disk", "tls_cert", "clamav", "threshold"], "description": "Check transport, DNS records, ICMP reachability, filesystem, TLS certificate expiry, antivirus, or threshold source." },
         "url": { "type": "string", "pattern": "^https?://\\S+$", "description": "HTTP(S) health endpoint." },
         "method": { "type": "string", "enum": ["GET", "HEAD"], "default": "GET", "description": "HTTP request method." },
         "follow_redirects": { "type": "boolean", "default": true, "description": "Follow HTTP redirects." },
@@ -97,6 +97,14 @@
         "port": { "$ref": "#/$defs/port", "description": "TCP destination port, or TLS port (defaults to 443 for tls_cert)." },
         "server_name": { "type": "string", "minLength": 1, "pattern": "^\\S+$", "description": "TLS SNI server name; defaults to host." },
         "min_days_remaining": { "type": "integer", "minimum": 0, "maximum": 36500, "description": "Minimum whole days remaining before the TLS leaf certificate expires." },
+        "name": { "type": "string", "minLength": 1, "pattern": "^\\S+$", "description": "DNS name to query." },
+        "record_type": { "type": "string", "enum": ["A", "AAAA", "CNAME", "MX", "NS", "TXT"], "default": "A", "description": "DNS record type queried through dig." },
+        "resolver": { "type": "string", "minLength": 1, "pattern": "^\\S+$", "description": "Optional DNS resolver hostname or address; the system resolver is used by default." },
+        "min_answers": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 100 }, { "type": "string", "pattern": "^0*(?:[1-9]|[1-9][0-9]|100)$" }], "default": 1, "description": "Minimum non-empty dig +short answers required for a DNS check." },
+        "expected_answers": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "pattern": "^[^\\r\\n]+$" }, "description": "Exact dig +short answer lines that must all be present." },
+        "count": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 10 }, { "type": "string", "pattern": "^0*(?:[1-9]|10)$" }], "default": 1, "description": "Number of ICMP echo packets sent by a ping check." },
+        "max_packet_loss_percent": { "type": "number", "minimum": 0, "maximum": 100, "default": 0, "description": "Maximum allowed ICMP packet loss percentage." },
+        "max_avg_rtt_ms": { "$ref": "#/$defs/nonNegativeNumber", "description": "Optional maximum average ICMP round-trip time in milliseconds." },
         "commands": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/commandStep" }, "description": "Commands whose exit status determines health." },
         "path": { "$ref": "#/$defs/absolutePath", "description": "Absolute file or directory path on the filesystem to measure with df." },
         "min_free_gb": { "$ref": "#/$defs/nonNegativeNumber", "description": "Minimum available space in GiB; disk check fails below this threshold." },
@@ -136,6 +144,8 @@
         { "required": ["type"] },
         { "if": { "properties": { "type": { "const": "http" } }, "required": ["type"] }, "then": { "required": ["url"] } },
         { "if": { "properties": { "type": { "const": "tcp" } }, "required": ["type"] }, "then": { "required": ["host", "port"] } },
+        { "if": { "properties": { "type": { "const": "dns" } }, "required": ["type"] }, "then": { "required": ["name"] } },
+        { "if": { "properties": { "type": { "const": "ping" } }, "required": ["type"] }, "then": { "required": ["host"] } },
         { "if": { "properties": { "type": { "const": "command" } }, "required": ["type"] }, "then": { "required": ["commands"] } },
         { "if": { "properties": { "type": { "const": "disk" } }, "required": ["type"] }, "then": { "required": ["path"], "anyOf": [{ "required": ["min_free_gb"] }, { "required": ["min_free_percent"] }] } },
         { "if": { "properties": { "type": { "const": "tls_cert" } }, "required": ["type"] }, "then": { "required": ["host", "min_days_remaining"] } },
@@ -163,9 +173,29 @@
         "max_delay": { "$ref": "#/$defs/max86400", "description": "Maximum delay in seconds; validate also checks that it is not below initial_delay." }
       }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["initial_delay", "multiplier", "max_delay"] }, "additionalProperties": false
     },
+    "httpRemediation": {
+      "type": "object", "required": ["url"], "description": "A remote HTTP remediation request. Use header value_env or body_env for secrets.",
+      "properties": {
+        "url": { "type": "string", "pattern": "^https?://\\S+$", "description": "Remote API endpoint. Prefer HTTPS and authentication headers rather than signed query strings." },
+        "method": { "type": "string", "enum": ["POST", "PUT", "PATCH", "DELETE"], "default": "POST", "description": "State-changing HTTP method." },
+        "headers": { "type": "array", "items": { "$ref": "#/$defs/httpHeader" }, "description": "Request headers. Use value_env for credentials." },
+        "body": { "type": "string", "description": "Literal non-secret request body." },
+        "body_env": { "$ref": "#/$defs/envName", "description": "Environment variable containing a request body; never logged or persisted." },
+        "timeout": { "$ref": "#/$defs/positiveInteger", "description": "Connection and total request timeout in seconds; defaults to settings.default_action_timeout." },
+        "success_status": { "type": "array", "minItems": 1, "items": { "oneOf": [{ "type": "integer", "minimum": 100, "maximum": 599 }, { "type": "string", "pattern": "^[1-5][0-9]{2}$" }] }, "description": "Accepted status codes; defaults to the 2xx range." }
+      }, "not": { "required": ["body", "body_env"] }, "additionalProperties": false
+    },
+    "httpRemediationAllowlist": {
+      "type": "object", "required": ["method", "url"], "description": "Exact HTTP method and URL permitted when remediation policy enforce mode is active.",
+      "properties": {
+        "method": { "type": "string", "enum": ["POST", "PUT", "PATCH", "DELETE"] },
+        "url": { "type": "string", "pattern": "^https?://\\S+$" }
+      }, "additionalProperties": false
+    },
     "actions": {
       "type": "object", "properties": {
         "commands": { "$ref": "#/$defs/commandSequence", "description": "Remediation commands run in order." },
+        "http": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/httpRemediation" }, "description": "Remote HTTP remediation requests run after commands in order." },
         "cooldown": { "$ref": "#/$defs/nonNegativeInteger", "default": 300, "description": "Minimum seconds between remediation attempts; defaults to settings.default_action_cooldown." },
         "verify_after": { "$ref": "#/$defs/nonNegativeInteger", "default": 0, "description": "Seconds to wait before a post-action readiness check." },
         "backoff": { "$ref": "#/$defs/backoff", "description": "Exponential retry delay after failed remediation." }
@@ -294,9 +324,10 @@
     }, "additionalProperties": false },
     "security": { "type": "object", "properties": {
       "remediation_policy": { "type": "object", "properties": {
-        "mode": { "type": "string", "enum": ["legacy", "enforce"], "default": "legacy", "description": "Legacy behavior or exact-command allowlist enforcement." },
-        "allowed_commands": { "$ref": "#/$defs/commandSequence", "description": "Exact allowed remediation argv vectors; validate also checks executable safety." }
-      }, "if": { "properties": { "mode": { "const": "enforce" } }, "required": ["mode"] }, "then": { "required": ["allowed_commands"], "properties": { "allowed_commands": { "minItems": 1 } } }, "additionalProperties": false }
+        "mode": { "type": "string", "enum": ["legacy", "enforce"], "default": "legacy", "description": "Legacy behavior or exact remediation command/HTTP allowlist enforcement." },
+        "allowed_commands": { "$ref": "#/$defs/commandSequence", "description": "Exact allowed remediation argv vectors; validate also checks executable safety." },
+        "allowed_http": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/httpRemediationAllowlist" }, "description": "Exact remote HTTP method/URL pairs permitted for remediation in enforce mode." }
+      }, "if": { "properties": { "mode": { "const": "enforce" } }, "required": ["mode"] }, "then": { "anyOf": [{ "required": ["allowed_commands"], "properties": { "allowed_commands": { "minItems": 1 } } }, { "required": ["allowed_http"], "properties": { "allowed_http": { "minItems": 1 } } }] }, "additionalProperties": false }
     }, "additionalProperties": false },
     "parallel": { "type": "object", "properties": {
       "enabled": { "type": "boolean", "default": false, "description": "Run check phase concurrently." },
@@ -382,7 +413,18 @@
           "token_env": { "type": "string", "pattern": "^(?:$|[A-Za-z_][A-Za-z0-9_]*)$", "description": "Optional bearer-token environment variable; empty means no token." },
           "priority": { "oneOf": [{ "type": "string", "enum": ["min", "low", "default", "high", "urgent", "max", "1", "2", "3", "4", "5"] }, { "type": "integer", "minimum": 1, "maximum": 5 }], "default": "default", "description": "ntfy priority: 1-5, min, low, default, high, urgent or max." },
           "template": { "$ref": "#/$defs/webhookTemplate", "description": "ntfy message templates." }
-        }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["url"] }, "additionalProperties": false }
+        }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["url"] }, "additionalProperties": false },
+        "pagerduty": { "type": "object", "properties": {
+          "enabled": { "type": "boolean", "default": false, "description": "Send PagerDuty Events API v2 trigger and resolve events." },
+          "routing_key_env": { "$ref": "#/$defs/envName", "description": "Environment variable containing the PagerDuty Events API routing key." },
+          "template": { "$ref": "#/$defs/webhookTemplate", "description": "Plain-text message templates for failure, recovery and escalation." }
+        }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["routing_key_env"] }, "additionalProperties": false },
+        "opsgenie": { "type": "object", "properties": {
+          "enabled": { "type": "boolean", "default": false, "description": "Send Opsgenie Alert API create and close events." },
+          "api_key_env": { "$ref": "#/$defs/envName", "description": "Environment variable containing the Opsgenie API key." },
+          "region": { "type": "string", "enum": ["us", "eu"], "default": "us", "description": "Opsgenie API region; eu selects api.eu.opsgenie.com." },
+          "template": { "$ref": "#/$defs/webhookTemplate", "description": "Plain-text message templates for failure, recovery and escalation." }
+        }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["api_key_env"] }, "additionalProperties": false }
       }, "additionalProperties": false }
     }, "additionalProperties": false },
     "urlWebhook": { "type": "object", "properties": {

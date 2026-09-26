@@ -29,6 +29,113 @@ record_action_attempt() {
     incident_update "$service_name" "$(read_state "$service_name")" attempt pending
 }
 
+http_remediation_status_is_successful() {
+    local expression="$1" status="$2" count index expected
+    count="$(yaml_read "${expression}.success_status // [] | length")"
+    if (( count == 0 )); then
+        [[ "$status" =~ ^2[0-9][0-9]$ ]]
+        return
+    fi
+    for ((index = 0; index < count; index++)); do
+        expected="$(yaml_read "${expression}.success_status[$index]")"
+        [[ "$status" == "$expected" ]] && return 0
+    done
+    return 1
+}
+
+log_http_remediation_plan() {
+    local expression="$1" service_name="$2" count index method
+    count="$(yaml_read "${expression} // [] | length")"
+    for ((index = 0; index < count; index++)); do
+        method="$(yaml_read "${expression}[$index].method // \"POST\"")"
+        log INFO "service=${service_name} action=remediation-http index=${index} result=would-run method=${method}"
+    done
+}
+
+run_http_remediation_sequence() {
+    local expression="$1" service_name="$2"
+    local count index action_path method url timeout_value header_count header_index header_name header_value header_env body body_env
+    local body_type curl_config body_file http_status curl_status
+    local -a curl_command
+
+    count="$(yaml_read "${expression} // [] | length")"
+    (( count > 0 )) || return 0
+    for ((index = 0; index < count; index++)); do
+        action_path="${expression}[$index]"
+        method="$(yaml_read "${action_path}.method // \"POST\"")"
+        url="$(yaml_read "${action_path}.url")"
+        if ! security_policy_check_http "$method" "$url"; then
+            log ERROR "service=${service_name} action=remediation-http index=${index} result=blocked reason=security_policy"
+            return 1
+        fi
+        timeout_value="$(yaml_read "${action_path}.timeout // ${DEFAULT_ACTION_TIMEOUT}")"
+        curl_command=(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --request "$method" --connect-timeout "$timeout_value" --max-time "$timeout_value")
+        curl_config="$(mktemp "${TEMP_DIRECTORY}/remediation-http-config.XXXXXX")" || {
+            log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=config-file-create"
+            return 1
+        }
+        chmod 0600 "$curl_config" 2>/dev/null || true
+        header_count="$(yaml_read "${action_path}.headers // [] | length")"
+        for ((header_index = 0; header_index < header_count; header_index++)); do
+            header_name="$(yaml_read "${action_path}.headers[$header_index].name")"
+            header_env="$(yaml_read "${action_path}.headers[$header_index].value_env // \"\"")"
+            if [[ -n "$header_env" ]]; then
+                header_value="${!header_env:-}"
+                if [[ -z "$header_value" || "$header_value" == *$'\r'* || "$header_value" == *$'\n'* ]]; then
+                    rm -f -- "$curl_config"
+                    log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=invalid-or-missing-env:${header_env}"
+                    return 1
+                fi
+            else
+                header_value="$(yaml_read "${action_path}.headers[$header_index].value")"
+            fi
+            if ! printf 'header = "%s"\n' "$(escape_curl_config_value "${header_name}: ${header_value}")" >>"$curl_config"; then
+                rm -f -- "$curl_config"
+                log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=config-file-write"
+                return 1
+            fi
+        done
+        curl_command+=(--config "$curl_config")
+        body_file=''
+        body_type="$(yaml_read "${action_path}.body | type")"
+        body_env="$(yaml_read "${action_path}.body_env // \"\"")"
+        if [[ "$body_type" != '!!null' || -n "$body_env" ]]; then
+            if [[ -n "$body_env" ]]; then
+                body="${!body_env:-}"
+                if [[ -z "$body" ]]; then
+                    rm -f -- "$curl_config"
+                    log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=missing-env:${body_env}"
+                    return 1
+                fi
+            else
+                body="$(yaml_read "${action_path}.body")"
+            fi
+            body_file="$(mktemp "${TEMP_DIRECTORY}/remediation-http-body.XXXXXX")" || {
+                rm -f -- "$curl_config"
+                log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=body-file-create"
+                return 1
+            }
+            chmod 0600 "$body_file" 2>/dev/null || true
+            if ! printf '%s' "$body" >"$body_file"; then
+                rm -f -- "$curl_config" "$body_file"
+                log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=body-file-write"
+                return 1
+            fi
+            curl_command+=(--data-binary "@${body_file}")
+        fi
+        http_status="$("${curl_command[@]}" "$url" 2>/dev/null)"
+        curl_status=$?
+        rm -f -- "$curl_config" "$body_file"
+        if (( curl_status == 0 )) && http_remediation_status_is_successful "$action_path" "$http_status"; then
+            log INFO "service=${service_name} action=remediation-http index=${index} result=sent method=${method} http_status=${http_status}"
+            continue
+        fi
+        log ERROR "service=${service_name} action=remediation-http index=${index} result=failed method=${method} curl_exit=${curl_status} http_status=${http_status:-000}"
+        return 1
+    done
+    return 0
+}
+
 maintenance_marker_file() {
     local service_name="$1" marker="$2"
     printf '%s/%s.%s' "$STATE_DIRECTORY" "$service_name" "$marker"
@@ -962,7 +1069,7 @@ service_is_required_for() {
 
 process_service() {
     local index="$1"
-    local enabled actions_count verify_after action_due=0 half_open_attempt=0 initial_check_healthy=0 initial_check_degraded=0 has_readiness=0
+    local enabled actions_count command_actions_count http_actions_count verify_after action_due=0 half_open_attempt=0 initial_check_healthy=0 initial_check_degraded=0 has_readiness=0
     CURRENT_SERVICE="$(yaml_read ".services[$index].name")"
     if [[ "$(yaml_read ".services[$index].health | type")" == '!!map' ]]; then
         has_readiness=1
@@ -1073,7 +1180,9 @@ process_service() {
     fi
 
     update_maintenance_status "$CURRENT_SERVICE"
-    actions_count="$(yaml_read ".services[$index].actions.commands // [] | length")"
+    command_actions_count="$(yaml_read ".services[$index].actions.commands // [] | length")"
+    http_actions_count="$(yaml_read ".services[$index].actions.http // [] | length")"
+    actions_count=$((command_actions_count + http_actions_count))
     if (( actions_count == 0 )); then
         CURRENT_ACTION_STATUS="not-configured"
     elif (( MAINTENANCE_ACTIVE == 1 )); then
@@ -1116,7 +1225,8 @@ process_service() {
         if (( DRY_RUN == 1 )); then
             if (( action_due == 1 )); then
                 log WARN "service=${CURRENT_SERVICE} action=remediation result=would-run reason=dry-run commands=${actions_count}"
-                log_configured_sequence_plan ".services[$index].actions.commands" remediation "$CURRENT_SERVICE"
+                (( command_actions_count == 0 )) || log_configured_sequence_plan ".services[$index].actions.commands" remediation "$CURRENT_SERVICE"
+                (( http_actions_count == 0 )) || log_http_remediation_plan ".services[$index].actions.http" "$CURRENT_SERVICE"
             else
                 log WARN "service=${CURRENT_SERVICE} action=remediation result=skipped reason=${CURRENT_ACTION_STATUS} dry_run=true"
             fi
@@ -1125,11 +1235,18 @@ process_service() {
         elif (( action_due == 1 )); then
             ACTION_ATTEMPTED=1
             record_action_attempt "$CURRENT_SERVICE"
-            log WARN "service=${CURRENT_SERVICE} action=remediation-start commands=${actions_count}"
-            if run_configured_sequence ".services[$index].actions.commands" remediation "$CURRENT_SERVICE"; then
-                CURRENT_ACTION_STATUS="commands-succeeded"
+            log WARN "service=${CURRENT_SERVICE} action=remediation-start actions=${actions_count}"
+            if run_configured_sequence ".services[$index].actions.commands" remediation "$CURRENT_SERVICE" &&
+                run_http_remediation_sequence ".services[$index].actions.http" "$CURRENT_SERVICE"; then
+                if (( command_actions_count > 0 && http_actions_count > 0 )); then
+                    CURRENT_ACTION_STATUS="actions-succeeded"
+                elif (( http_actions_count > 0 )); then
+                    CURRENT_ACTION_STATUS="http-succeeded"
+                else
+                    CURRENT_ACTION_STATUS="commands-succeeded"
+                fi
             else
-                CURRENT_ACTION_STATUS="command-failed"
+                CURRENT_ACTION_STATUS="action-failed"
             fi
 
             if (( half_open_attempt == 1 )); then
@@ -1168,7 +1285,7 @@ process_service() {
                 log WARN "service=${CURRENT_SERVICE} result=recovered-after-remediation"
                 return 0
             fi
-            if [[ "$CURRENT_ACTION_STATUS" == commands-succeeded ]]; then
+            if [[ "$CURRENT_ACTION_STATUS" == commands-succeeded || "$CURRENT_ACTION_STATUS" == http-succeeded || "$CURRENT_ACTION_STATUS" == actions-succeeded ]]; then
                 CURRENT_ACTION_STATUS="verification-failed"
             fi
             record_circuit_action_result "$index" "$CURRENT_SERVICE" false

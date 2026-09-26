@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+settings:
+  log_file: /var/log/service-watchdog/remote-remediation.log
+  lock_file: /run/lock/service-watchdog-remote-remediation.lock
+  state_directory: /var/lib/service-watchdog/remote-remediation
+  default_action_cooldown: 300
+
+security:
+  remediation_policy:
+    mode: enforce
+    allowed_http:
+      - method: POST
+        url: https://portainer.example.com/api/endpoints/3/docker/containers/api/restart
+
+services:
+  - name: api
+    check:
+      type: http
+      url: http://127.0.0.1:8080/health
+      attempts: 1
+    actions:
+      cooldown: 300
+      verify_after: 10
+      http:
+        - method: POST
+          url: https://portainer.example.com/api/endpoints/3/docker/containers/api/restart
+          timeout: 30
+          headers:
+            - name: X-API-Key
+              value_env: WATCHDOG_PORTAINER_API_KEY
+          body: '{"force":true}'
+          success_status: [204]

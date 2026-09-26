@@ -260,23 +260,130 @@ security_policy_check_command() {
     return 1
 }
 
+validate_http_remediation_sequence() {
+    local expression="$1" description="$2"
+    local sequence_type sequence_count action_index action_type value value_type status_count status_index
+    local header_count header_index header_type header_name header_value_type header_env_type
+
+    sequence_type="$(yaml_read "${expression} | type")"
+    [[ "$sequence_type" == '!!seq' ]] || die "${description} must be a YAML array."
+    sequence_count="$(yaml_read "${expression} | length")"
+    (( sequence_count > 0 )) || die "${description} must not be empty."
+    for ((action_index = 0; action_index < sequence_count; action_index++)); do
+        action_type="$(yaml_read "${expression}[$action_index] | type")"
+        [[ "$action_type" == '!!map' ]] || die "${description}[$action_index] must be a map."
+        validate_string "${expression}[$action_index].url" "${description}[$action_index].url"
+        value="$(yaml_read "${expression}[$action_index].url")"
+        [[ "$value" =~ ^https?://[^[:space:]]+$ ]] || die "${description}[$action_index].url must be an HTTP(S) URL without spaces."
+        value="$(yaml_read "${expression}[$action_index].method // \"POST\"")"
+        case "$value" in POST|PUT|PATCH|DELETE) ;; *) die "${description}[$action_index].method must be POST, PUT, PATCH, or DELETE." ;; esac
+        value="$(yaml_read "${expression}[$action_index].timeout // ${DEFAULT_ACTION_TIMEOUT}")"
+        is_positive_integer "$value" || die "${description}[$action_index].timeout must be a positive integer."
+        value_type="$(yaml_read "${expression}[$action_index].success_status | type")"
+        if [[ "$value_type" != '!!null' ]]; then
+            [[ "$value_type" == '!!seq' ]] || die "${description}[$action_index].success_status must be an array."
+            status_count="$(yaml_read "${expression}[$action_index].success_status | length")"
+            (( status_count > 0 )) || die "${description}[$action_index].success_status must not be empty."
+            for ((status_index = 0; status_index < status_count; status_index++)); do
+                value="$(yaml_read "${expression}[$action_index].success_status[$status_index]")"
+                if ! [[ "$value" =~ ^[0-9]{3}$ ]] || (( 10#$value < 100 || 10#$value > 599 )); then
+                    die "${description}[$action_index].success_status[$status_index] must be an HTTP status from 100 to 599."
+                fi
+            done
+        fi
+        value_type="$(yaml_read "${expression}[$action_index].body | type")"
+        [[ "$value_type" == '!!null' || "$value_type" == '!!str' ]] || die "${description}[$action_index].body must be a string."
+        header_env_type="$(yaml_read "${expression}[$action_index].body_env | type")"
+        [[ "$header_env_type" == '!!null' || "$header_env_type" == '!!str' ]] || die "${description}[$action_index].body_env must be a string."
+        [[ "$value_type" == '!!null' || "$header_env_type" == '!!null' ]] || die "${description}[$action_index] must set only one of body or body_env."
+        if [[ "$header_env_type" != '!!null' ]]; then
+            value="$(yaml_read "${expression}[$action_index].body_env")"
+            [[ "$value" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "${description}[$action_index].body_env is not a valid environment variable name."
+        fi
+        value_type="$(yaml_read "${expression}[$action_index].headers | type")"
+        [[ "$value_type" == '!!null' ]] && continue
+        [[ "$value_type" == '!!seq' ]] || die "${description}[$action_index].headers must be an array."
+        header_count="$(yaml_read "${expression}[$action_index].headers | length")"
+        for ((header_index = 0; header_index < header_count; header_index++)); do
+            header_type="$(yaml_read "${expression}[$action_index].headers[$header_index] | type")"
+            [[ "$header_type" == '!!map' ]] || die "${description}[$action_index].headers[$header_index] must be a map."
+            validate_string "${expression}[$action_index].headers[$header_index].name" "${description}[$action_index].headers[$header_index].name"
+            header_name="$(yaml_read "${expression}[$action_index].headers[$header_index].name")"
+            [[ -n "$header_name" && "$header_name" != *[$' \t\r\n:']* ]] || die "${description}[$action_index].headers[$header_index].name must be a non-empty HTTP header name."
+            header_value_type="$(yaml_read "${expression}[$action_index].headers[$header_index].value | type")"
+            header_env_type="$(yaml_read "${expression}[$action_index].headers[$header_index].value_env | type")"
+            [[ "$header_value_type" == '!!null' || "$header_value_type" == '!!str' ]] || die "${description}[$action_index].headers[$header_index].value must be a string."
+            [[ "$header_env_type" == '!!null' || "$header_env_type" == '!!str' ]] || die "${description}[$action_index].headers[$header_index].value_env must be a string."
+            [[ "$header_value_type" == '!!null' || "$header_env_type" == '!!null' ]] || die "${description}[$action_index].headers[$header_index] must set only one of value or value_env."
+            [[ "$header_value_type" != '!!null' || "$header_env_type" != '!!null' ]] || die "${description}[$action_index].headers[$header_index] needs value or value_env."
+            if [[ "$header_value_type" != '!!null' ]]; then
+                value="$(yaml_read "${expression}[$action_index].headers[$header_index].value")"
+                [[ "$value" != *$'\r'* && "$value" != *$'\n'* ]] || die "${description}[$action_index].headers[$header_index].value must not contain a newline."
+            else
+                value="$(yaml_read "${expression}[$action_index].headers[$header_index].value_env")"
+                [[ "$value" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "${description}[$action_index].headers[$header_index].value_env is not a valid environment variable name."
+            fi
+        done
+    done
+}
+
+validate_http_remediation_allowlist() {
+    local expression='.security.remediation_policy.allowed_http' entry_count entry_index entry_type method url
+    local sequence_type
+
+    sequence_type="$(yaml_read "${expression} | type")"
+    [[ "$sequence_type" == '!!seq' ]] || die "${expression} must be a YAML array."
+    entry_count="$(yaml_read "${expression} | length")"
+    (( entry_count > 0 )) || die "${expression} must not be empty."
+    for ((entry_index = 0; entry_index < entry_count; entry_index++)); do
+        entry_type="$(yaml_read "${expression}[$entry_index] | type")"
+        [[ "$entry_type" == '!!map' ]] || die "${expression}[$entry_index] must be a map."
+        method="$(yaml_read "${expression}[$entry_index].method")"
+        case "$method" in POST|PUT|PATCH|DELETE) ;; *) die "${expression}[$entry_index].method must be POST, PUT, PATCH, or DELETE." ;; esac
+        validate_string "${expression}[$entry_index].url" "${expression}[$entry_index].url"
+        url="$(yaml_read "${expression}[$entry_index].url")"
+        [[ "$url" =~ ^https?://[^[:space:]]+$ ]] || die "${expression}[$entry_index].url must be an HTTP(S) URL without spaces."
+    done
+}
+
+security_policy_check_http() {
+    local method="$1" url="$2" allow_count allow_index allowed_method allowed_url
+
+    [[ "$(yaml_read '.security.remediation_policy.mode // "legacy"')" == enforce ]] || return 0
+    allow_count="$(yaml_read '.security.remediation_policy.allowed_http | length')"
+    for ((allow_index = 0; allow_index < allow_count; allow_index++)); do
+        allowed_method="$(yaml_read ".security.remediation_policy.allowed_http[$allow_index].method")"
+        allowed_url="$(yaml_read ".security.remediation_policy.allowed_http[$allow_index].url")"
+        [[ "$method" == "$allowed_method" && "$url" == "$allowed_url" ]] && return 0
+    done
+    return 1
+}
+
 validate_security_policy() {
-    local mode policy_type count index service_count command_count expression description
+    local mode policy_type count index service_count command_count http_count expression description allowed_commands_type allowed_http_type
     local -a candidate=()
     policy_type="$(yaml_read '.security.remediation_policy | type')"
     [[ "$policy_type" == '!!null' || "$policy_type" == '!!map' ]] || die 'security.remediation_policy must be a map.'
     mode="$(yaml_read '.security.remediation_policy.mode // "legacy"')"
     [[ "$mode" == legacy || "$mode" == enforce ]] || die 'security.remediation_policy.mode must be legacy or enforce.'
+    allowed_commands_type="$(yaml_read '.security.remediation_policy.allowed_commands | type')"
+    allowed_http_type="$(yaml_read '.security.remediation_policy.allowed_http | type')"
+    [[ "$allowed_commands_type" == '!!null' || "$allowed_commands_type" == '!!seq' ]] || die 'security.remediation_policy.allowed_commands must be a YAML array.'
+    [[ "$allowed_http_type" == '!!null' || "$allowed_http_type" == '!!seq' ]] || die 'security.remediation_policy.allowed_http must be a YAML array.'
+    [[ "$allowed_http_type" != '!!null' ]] && validate_http_remediation_allowlist
     [[ "$mode" == enforce ]] || return 0
-    require_command realpath
-    require_command head
-    validate_command_sequence '.security.remediation_policy.allowed_commands' 'security.remediation_policy.allowed_commands'
-    count="$(yaml_read '.security.remediation_policy.allowed_commands | length')"
-    for ((index = 0; index < count; index++)); do
-        load_command ".security.remediation_policy.allowed_commands[$index].command" candidate
-        security_policy_check_command candidate ||
-            die "security.remediation_policy.allowed_commands[$index].command is unsafe or not an exact allowlist entry."
-    done
+    [[ "$allowed_commands_type" != '!!null' || "$allowed_http_type" != '!!null' ]] || die 'security.remediation_policy.mode=enforce needs allowed_commands or allowed_http.'
+    if [[ "$allowed_commands_type" != '!!null' ]]; then
+        require_command realpath
+        require_command head
+        validate_command_sequence '.security.remediation_policy.allowed_commands' 'security.remediation_policy.allowed_commands'
+        count="$(yaml_read '.security.remediation_policy.allowed_commands | length')"
+        for ((index = 0; index < count; index++)); do
+            load_command ".security.remediation_policy.allowed_commands[$index].command" candidate
+            security_policy_check_command candidate ||
+                die "security.remediation_policy.allowed_commands[$index].command is unsafe or not an exact allowlist entry."
+        done
+    fi
     service_count="$(yaml_read '.services | length')"
     for ((index = 0; index < service_count; index++)); do
         for description in actions.commands escalation.actions.commands; do
@@ -287,6 +394,12 @@ validate_security_policy() {
                 security_policy_check_command candidate ||
                     die "${expression}[$count].command is not allowed by security.remediation_policy."
             done
+        done
+        expression=".services[$index].actions.http"
+        http_count="$(yaml_read "${expression} // [] | length")"
+        for ((count = 0; count < http_count; count++)); do
+            security_policy_check_http "$(yaml_read "${expression}[$count].method // \"POST\"")" "$(yaml_read "${expression}[$count].url")" ||
+                die "${expression}[$count] is not allowed by security.remediation_policy.allowed_http."
         done
     done
 }
@@ -380,7 +493,7 @@ validate_webhook_configuration() {
     [[ "$webhooks_type" == "!!null" ]] && return 0
     [[ "$webhooks_type" == "!!map" ]] || die "notifications.webhooks must be a YAML map."
 
-    for webhook in telegram discord slack ntfy; do
+    for webhook in telegram discord slack ntfy pagerduty opsgenie; do
         value_type="$(yaml_read ".notifications.webhooks.${webhook} | type")"
         [[ "$value_type" == "!!null" ]] && continue
         [[ "$value_type" == "!!map" ]] || die "notifications.webhooks.${webhook} must be a YAML map."
@@ -427,6 +540,20 @@ validate_webhook_configuration() {
                 priority="$(yaml_read '.notifications.webhooks.ntfy.priority // "default"')"
                 [[ "$priority" =~ ^[1-5]$ || "$priority" =~ ^(min|low|default|high|urgent|max)$ ]] ||
                     die "notifications.webhooks.ntfy.priority must be 1-5, min, low, default, high, urgent, or max."
+                ;;
+            pagerduty)
+                validate_string '.notifications.webhooks.pagerduty.routing_key_env' 'notifications.webhooks.pagerduty.routing_key_env'
+                env_name="$(yaml_read '.notifications.webhooks.pagerduty.routing_key_env')"
+                [[ "$env_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+                    die "notifications.webhooks.pagerduty.routing_key_env is not a valid environment variable name."
+                ;;
+            opsgenie)
+                validate_string '.notifications.webhooks.opsgenie.api_key_env' 'notifications.webhooks.opsgenie.api_key_env'
+                env_name="$(yaml_read '.notifications.webhooks.opsgenie.api_key_env')"
+                [[ "$env_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+                    die "notifications.webhooks.opsgenie.api_key_env is not a valid environment variable name."
+                value="$(yaml_read '.notifications.webhooks.opsgenie.region // "us"')"
+                [[ "$value" == us || "$value" == eu ]] || die 'notifications.webhooks.opsgenie.region must be us or eu.'
                 ;;
         esac
 
@@ -1093,6 +1220,55 @@ validate_check_definition() {
                 die "${description}.port must be from 1 through 65535."
             fi
             ;;
+        dns)
+            validate_string "${expression}.name" "${description}.name"
+            value="$(yaml_read "${expression}.name")"
+            [[ -n "$value" && "$value" != *[[:space:]]* ]] || die "${description}.name must not be empty or contain spaces."
+            value="$(yaml_read "${expression}.record_type // \"A\"")"
+            case "$value" in A|AAAA|CNAME|MX|NS|TXT) ;; *) die "${description}.record_type must be A, AAAA, CNAME, MX, NS, or TXT." ;; esac
+            value_type="$(yaml_read "${expression}.resolver | type")"
+            if [[ "$value_type" != '!!null' ]]; then
+                validate_string "${expression}.resolver" "${description}.resolver"
+                value="$(yaml_read "${expression}.resolver")"
+                [[ -n "$value" && "$value" != *[[:space:]]* ]] || die "${description}.resolver must not be empty or contain spaces."
+            fi
+            value="$(yaml_read "${expression}.min_answers // 1")"
+            if ! is_positive_integer "$value" || (( 10#$value > 100 )); then
+                die "${description}.min_answers must be from 1 to 100."
+            fi
+            value_type="$(yaml_read "${expression}.expected_answers | type")"
+            if [[ "$value_type" != '!!null' ]]; then
+                [[ "$value_type" == '!!seq' ]] || die "${description}.expected_answers must be an array."
+                status_count="$(yaml_read "${expression}.expected_answers | length")"
+                (( status_count > 0 )) || die "${description}.expected_answers must not be empty."
+                for ((status_index = 0; status_index < status_count; status_index++)); do
+                    validate_string "${expression}.expected_answers[$status_index]" "${description}.expected_answers[$status_index]"
+                    value="$(yaml_read "${expression}.expected_answers[$status_index]")"
+                    [[ -n "$value" && "$value" != *$'\r'* && "$value" != *$'\n'* ]] || die "${description}.expected_answers[$status_index] must be a non-empty single line."
+                done
+            fi
+            command -v dig >/dev/null 2>&1 || die "${description}.type=dns requires dig in PATH."
+            ;;
+        ping)
+            validate_string "${expression}.host" "${description}.host"
+            value="$(yaml_read "${expression}.host")"
+            [[ -n "$value" && "$value" != *[[:space:]]* ]] || die "${description}.host must not be empty or contain spaces."
+            value="$(yaml_read "${expression}.count // 1")"
+            if ! is_positive_integer "$value" || (( 10#$value > 10 )); then
+                die "${description}.count must be from 1 to 10."
+            fi
+            for field in max_packet_loss_percent max_avg_rtt_ms; do
+                value_type="$(yaml_read "${expression}.${field} | type")"
+                [[ "$value_type" == '!!null' ]] && continue
+                [[ "$value_type" == '!!int' || "$value_type" == '!!float' ]] || die "${description}.${field} must be a number."
+                value="$(yaml_read "${expression}.${field}")"
+                is_non_negative_number "$value" || die "${description}.${field} must be non-negative."
+                if [[ "$field" == max_packet_loss_percent ]] && ! LC_ALL=C awk -v threshold="$value" 'BEGIN { exit !(threshold <= 100) }'; then
+                    die "${description}.max_packet_loss_percent must not exceed 100."
+                fi
+            done
+            command -v ping >/dev/null 2>&1 || die "${description}.type=ping requires ping in PATH."
+            ;;
         command)
             validate_command_sequence "${expression}.commands" "${description}.commands"
             ;;
@@ -1155,7 +1331,7 @@ validate_check_definition() {
             case "$value" in '>'|'>='|'<'|'<='|'=='|'!=') ;; *) die "${description}.comparator must be >, >=, <, <=, ==, or !=." ;; esac
             validate_threshold_source "${expression}.source" "${description}.source"
             ;;
-        *) die "${description}.type must be http, tcp, command, disk, tls_cert, clamav, or threshold." ;;
+        *) die "${description}.type must be http, tcp, dns, ping, command, disk, tls_cert, clamav, or threshold." ;;
     esac
     for field in timeout attempts retry_delay; do
         case "$field" in
@@ -1225,6 +1401,11 @@ validate_configuration() {
         if [[ "$actions_type" != "!!null" ]]; then
             validate_command_sequence ".services[$index].actions.commands" \
                 "Service '${name}': actions.commands" true
+        fi
+        actions_type="$(yaml_read ".services[$index].actions.http | type")"
+        if [[ "$actions_type" != "!!null" ]]; then
+            validate_http_remediation_sequence ".services[$index].actions.http" \
+                "services[$index].actions.http"
         fi
         value="$(yaml_read ".services[$index].actions.cooldown // ${DEFAULT_ACTION_COOLDOWN}")"
         is_non_negative_integer "$value" ||

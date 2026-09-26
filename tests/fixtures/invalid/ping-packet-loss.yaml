@@ -1,0 +1,10 @@
+settings:
+  log_file: /tmp/watchdog-schema-test.log
+  lock_file: /tmp/watchdog-schema-test.lock
+  state_directory: /tmp/watchdog-schema-test-state
+services:
+  - name: ping
+    check:
+      type: ping
+      host: 192.0.2.1
+      max_packet_loss_percent: 101

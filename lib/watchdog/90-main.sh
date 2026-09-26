@@ -44,7 +44,7 @@ main() {
                 esac
             done
             if [[ "$COMMAND_MODE" == notify-test ]]; then
-                case "$NOTIFY_TEST_CHANNEL" in email|telegram|discord|slack|ntfy|all) ;; *) die "Invalid notify-test channel: ${NOTIFY_TEST_CHANNEL}" ;; esac
+                case "$NOTIFY_TEST_CHANNEL" in email|telegram|discord|slack|ntfy|pagerduty|opsgenie|all) ;; *) die "Invalid notify-test channel: ${NOTIFY_TEST_CHANNEL}" ;; esac
                 case "$NOTIFY_TEST_EVENT" in failure|recovery|escalation) ;; *) die "Invalid notify-test event: ${NOTIFY_TEST_EVENT}" ;; esac
             fi
             set --

@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+settings:
+  log_file: /var/log/service-watchdog/oncall.log
+  lock_file: /run/lock/service-watchdog-oncall.lock
+  state_directory: /var/lib/service-watchdog/oncall
+
+notifications:
+  webhooks:
+    pagerduty:
+      enabled: true
+      routing_key_env: WATCHDOG_PAGERDUTY_ROUTING_KEY
+      template:
+        failure: "{{service}} unavailable: {{detail}}"
+        recovery: "{{service}} recovered after {{incident_duration_seconds}} seconds"
+        escalation: "ESCALATION: {{service}} has failed {{consecutive_unavailable}} checks"
+    opsgenie:
+      enabled: true
+      api_key_env: WATCHDOG_OPSGENIE_API_KEY
+      region: eu
+
+services:
+  - name: billing-api
+    check:
+      type: http
+      url: https://billing.example.com/health
+      success_status: [200]
+      attempts: 2

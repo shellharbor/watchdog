@@ -35,11 +35,12 @@ For task-oriented guides and additional runnable examples, see the
 
 - HTTP/HTTPS checks with redirects, timeouts, response assertions, latency SLOs, and expected statuses
 - TCP port checks using Bash `/dev/tcp`
+- Optional DNS record checks and ICMP ping loss/latency checks
 - Arbitrary command checks
 - Opt-in disk-space checks with free GiB and percentage thresholds
 - Opt-in TLS certificate expiry checks with SNI support and remaining-day thresholds
 - Opt-in ClamAV and event-count threshold checks for security monitoring
-- Ordered remediation commands without `eval`
+- Ordered command and remote HTTP remediation without `eval`
 - Per-service action cooldown
 - Optional persistent flapping guard and exponential action backoff
 - Dependency-ordered checks and separate liveness/readiness endpoints
@@ -48,7 +49,7 @@ For task-oriented guides and additional runnable examples, see the
 - Optional health verification after remediation
 - Failure and recovery hooks with environment variables
 - Built-in SMTP email alerts with YAML-configured templates and recipients
-- Telegram, Discord, Slack, and ntfy webhook alerts
+- Telegram, Discord, Slack, ntfy, PagerDuty, and Opsgenie alerts
 - Persistent state and transition-only hooks
 - Global non-blocking lock to prevent overlapping runs
 - In-memory YAML lookup cache to avoid repeated parser processes during each run
@@ -113,6 +114,36 @@ sudo /opt/service-watchdog/service-watchdog.sh
 Or run `sudo ./install.sh` to verify dependencies, install the script and
 example configuration, create runtime directories, install the systemd units,
 and reload systemd. The installer preserves an existing configuration.
+
+## Validate configuration in GitHub Actions
+
+Use the bundled Docker Action to run the same read-only `validate` command in
+pull requests before deployment. It includes Bash, Mike Farah `yq` v4, and the
+optional Watchdog check tools; it does not run checks, remediation, hooks, or
+notifications, and it never creates Watchdog state.
+
+```yaml
+name: Validate Watchdog configuration
+
+on: [pull_request, push]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shellharbor/watchdog@v1
+        with:
+          config: monitoring/watchdog.yaml
+```
+
+`config` is relative to the checked-out workspace and cannot escape it. The
+action exits `0` for a valid configuration and `2` with a field-specific error
+otherwise. If enforce-mode remediation refers to executables that exist only on
+the production host, validate that policy there as part of deployment too.
 
 ### Version and release metadata
 
@@ -281,6 +312,49 @@ safe-to-adapt configuration.
 Required fields: `type: tcp`, `host`, and `port`. The check succeeds when a TCP
 connection can be opened before the timeout.
 
+#### DNS
+
+`type: dns` queries `dig +short` for `A`, `AAAA`, `CNAME`, `MX`, `NS`, or `TXT`
+records. `name` is required; `resolver` selects an optional resolver,
+`min_answers` defaults to one, and `expected_answers` requires every listed
+answer line to be present exactly as emitted by `dig +short`.
+
+```yaml
+services:
+  - name: public-api-dns
+    check:
+      type: dns
+      name: api.example.com
+      record_type: A
+      resolver: 1.1.1.1
+      expected_answers: [203.0.113.42]
+      timeout: 5
+```
+
+DNS checks need `dig` only when enabled; `validate` reports a clear error if it
+is absent. See [`examples/dns-ping.yaml`](examples/dns-ping.yaml).
+
+#### ICMP Ping
+
+`type: ping` uses the Linux `ping` utility to check host reachability. Set
+`count`, `max_packet_loss_percent` (default `0`), and optionally
+`max_avg_rtt_ms` to turn loss or latency into an unavailable state.
+
+```yaml
+services:
+  - name: upstream-router
+    check:
+      type: ping
+      host: 192.0.2.1
+      count: 3
+      max_packet_loss_percent: 0
+      max_avg_rtt_ms: 50
+```
+
+`ping` is optional and is checked only for services that select this type. ICMP
+may be filtered by a healthy host, so use an HTTP or TCP check when it better
+matches the service contract.
+
 #### Command
 
 Required fields: `type: command` and `commands`. Commands run sequentially and
@@ -405,6 +479,45 @@ reviewed `actions.commands` rule if you want remediation. See
 Set `cooldown: 0` to allow an action on every scheduled run. Commands stop at
 the first failure, matching shell `&&` semantics. A continuing outage can retry
 remediation after its cooldown, but it does not repeat the failure email.
+
+#### Remote HTTP remediation
+
+`actions.http` invokes a remote API without a shell. Requests run after any
+`actions.commands`, stop on their first failure, and participate in the same
+cooldown, backoff, circuit-breaker, flapping, maintenance, post-action verify,
+and `--dry-run` rules as local remediation.
+
+```yaml
+services:
+  - name: api
+    check: {type: http, url: http://127.0.0.1:8080/health}
+    actions:
+      http:
+        - method: POST
+          url: https://portainer.example.com/api/endpoints/3/docker/containers/api/restart
+          headers:
+            - name: X-API-Key
+              value_env: WATCHDOG_PORTAINER_API_KEY
+          body: '{"force":true}'
+          success_status: [204]
+          timeout: 30
+```
+
+`method` is `POST`, `PUT`, `PATCH`, or `DELETE`; accepted statuses default to
+2xx. Keep credentials in `headers[].value_env` or `body_env`, never YAML.
+Payloads and secret headers are delivered through private mode-`0600` temporary
+files, not curl command-line arguments. In enforce mode, allow the exact pair:
+
+```yaml
+security:
+  remediation_policy:
+    mode: enforce
+    allowed_http:
+      - method: POST
+        url: https://portainer.example.com/api/endpoints/3/docker/containers/api/restart
+```
+
+See [`examples/remote-http-remediation.yaml`](examples/remote-http-remediation.yaml).
 
 ### Liveness, readiness, and incident state
 
@@ -730,6 +843,31 @@ variable is logged as `result=webhook-failed` with its variable name, never its
 value. Webhook URLs and tokens are not written to the operational log. See
 [`examples/telegram-notifications.yaml`](examples/telegram-notifications.yaml)
 for a Telegram-only starting point.
+
+#### PagerDuty and Opsgenie
+
+PagerDuty and Opsgenie are opt-in on-call channels under `notifications.webhooks`.
+Failure and escalation events create or update an alert; recovery resolves the
+same alert. Watchdog derives the provider deduplication key (PagerDuty) and
+alias (Opsgenie) from its incident ID, so repeated failed checks do not create
+new on-call incidents.
+
+```yaml
+notifications:
+  webhooks:
+    pagerduty:
+      enabled: true
+      routing_key_env: WATCHDOG_PAGERDUTY_ROUTING_KEY
+    opsgenie:
+      enabled: true
+      api_key_env: WATCHDOG_OPSGENIE_API_KEY
+      region: eu  # us is the default
+```
+
+Both credentials are read from the environment, stored only in private
+temporary curl files during delivery, and never logged. `notify-test` supports
+both provider names as `--channel pagerduty` and `--channel opsgenie`.
+See [`examples/oncall-notifications.yaml`](examples/oncall-notifications.yaml).
 
 ### Maintenance Windows
 
@@ -1538,9 +1676,10 @@ security:
 
 Validation and execution reject relative and symlink executable paths,
 shebang scripts, unlisted arguments, and shell/wrapper executables such as
-`bash`, `env`, and `sudo`. The policy covers `actions.commands` and
-`escalation.actions.commands` only; `check.commands`, conditions, and hooks
-remain trusted administrator configuration and can have side effects.
+`bash`, `env`, and `sudo`. The policy covers `actions.commands`,
+`escalation.actions.commands`, and exact method/URL entries in `actions.http`;
+`check.commands`, conditions, and hooks remain trusted administrator
+configuration and can have side effects.
 Protect the YAML, the executable and its parent directories, state and lock
 directories, and the service account from untrusted writes. An exact-argument
 allowlist is not a sandbox: a trusted binary may still have dangerous behavior
@@ -1554,7 +1693,8 @@ enforce after reviewing actions.
 ```bash
 bash ./scripts/build-watchdog.sh --check
 bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh
-shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh tests/*.sh
+bash -n scripts/github-action-entrypoint.sh
+shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh scripts/github-action-entrypoint.sh tests/*.sh
 bash ./tests/versioning.sh
 bash ./tests/run-all.sh
 ```

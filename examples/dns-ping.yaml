@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+settings:
+  log_file: /var/log/service-watchdog/network.log
+  lock_file: /run/lock/service-watchdog-network.lock
+  state_directory: /var/lib/service-watchdog/network
+
+services:
+  - name: public-api-dns
+    check:
+      type: dns
+      name: api.example.com
+      record_type: A
+      resolver: 1.1.1.1
+      min_answers: 1
+      expected_answers:
+        - 203.0.113.42
+      timeout: 5
+      attempts: 2
+
+  - name: upstream-router
+    check:
+      type: ping
+      host: 192.0.2.1
+      count: 3
+      max_packet_loss_percent: 0
+      max_avg_rtt_ms: 50
+      timeout: 5
+      attempts: 2

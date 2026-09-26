@@ -7,6 +7,17 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- A self-contained GitHub Action for read-only Watchdog configuration
+  validation in pull requests and deployment workflows.
+- Optional DNS record checks through `dig` and ICMP reachability checks through
+  Linux `ping`, including answer, packet-loss, and average-RTT thresholds.
+- PagerDuty and Opsgenie on-call notifications with incident-ID deduplication
+  and automatic recovery resolution.
+- Remote HTTP remediation with timeout/status validation, secret-safe temporary
+  request files, and exact method/URL allowlisting in enforce mode.
+
 ## [1.5.0] - 2026-09-26
 
 ### Added

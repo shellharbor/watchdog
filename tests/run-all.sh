@@ -16,9 +16,11 @@ readonly TEST_SCRIPTS=(
     email-notifications.sh
     escalation.sh
     federation.sh
+    github-action.sh
     health-policy.sh
     history.sh
     maintenance.sh
+    network-oncall-remediation.sh
     notify-test.sh
     parallel.sh
     prometheus.sh

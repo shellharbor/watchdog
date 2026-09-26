@@ -139,6 +139,101 @@ check_tcp() {
     return 1
 }
 
+check_dns() {
+    local name record_type resolver timeout_value min_answers expected_count expected_index expected answer_count=0
+    local output_file command_status answer_preview=''
+    local -a dig_command
+
+    name="$(yaml_read "${CHECK_CONFIG_PATH}.name")"
+    record_type="$(yaml_read "${CHECK_CONFIG_PATH}.record_type // \"A\"")"
+    resolver="$(yaml_read "${CHECK_CONFIG_PATH}.resolver // \"\"")"
+    timeout_value="$(yaml_read "${CHECK_CONFIG_PATH}.timeout // ${DEFAULT_TIMEOUT}")"
+    min_answers="$(yaml_read "${CHECK_CONFIG_PATH}.min_answers // 1")"
+    CHECK_HTTP_STATUS=''
+    output_file="${TEMP_DIRECTORY}/dns-${RANDOM}.out"
+    dig_command=(dig "+time=${timeout_value}" +tries=1 +short)
+    [[ -z "$resolver" ]] || dig_command+=("@${resolver}")
+    dig_command+=("$name" "$record_type")
+    timeout --signal=TERM --kill-after=2s "$timeout_value" "${dig_command[@]}" >"$output_file" 2>/dev/null
+    command_status=$?
+    CHECK_EXIT_CODE="$command_status"
+    if (( command_status != 0 )); then
+        rm -f -- "$output_file"
+        CHECK_DETAIL="DNS ${name} ${record_type} query failed; exit=${command_status}"
+        return 1
+    fi
+    while IFS= read -r expected; do
+        [[ -z "$expected" ]] || answer_count=$((answer_count + 1))
+    done <"$output_file"
+    if (( answer_count < 10#$min_answers )); then
+        rm -f -- "$output_file"
+        CHECK_DETAIL="DNS ${name} ${record_type}; answers=${answer_count} below min_answers=${min_answers}"
+        return 1
+    fi
+    expected_count="$(yaml_read "${CHECK_CONFIG_PATH}.expected_answers // [] | length")"
+    for ((expected_index = 0; expected_index < expected_count; expected_index++)); do
+        expected="$(yaml_read "${CHECK_CONFIG_PATH}.expected_answers[$expected_index]")"
+        if ! grep -F -x -- "$expected" "$output_file" >/dev/null; then
+            rm -f -- "$output_file"
+            CHECK_DETAIL="DNS ${name} ${record_type}; expected answer missing"
+            return 1
+        fi
+    done
+    answer_preview="$(head -n 1 -- "$output_file" 2>/dev/null)"
+    rm -f -- "$output_file"
+    CHECK_DETAIL="DNS ${name} ${record_type}; answers=${answer_count}${answer_preview:+; first=${answer_preview}}"
+    return 0
+}
+
+check_ping() {
+    local host count timeout_value timeout_budget max_loss max_average ping_output command_status packet_loss average rtt_line
+    local -a ping_command
+
+    host="$(yaml_read "${CHECK_CONFIG_PATH}.host")"
+    count="$(yaml_read "${CHECK_CONFIG_PATH}.count // 1")"
+    timeout_value="$(yaml_read "${CHECK_CONFIG_PATH}.timeout // ${DEFAULT_TIMEOUT}")"
+    max_loss="$(yaml_read "${CHECK_CONFIG_PATH}.max_packet_loss_percent // 0")"
+    max_average="$(yaml_read "${CHECK_CONFIG_PATH}.max_avg_rtt_ms // \"\"")"
+    CHECK_HTTP_STATUS=''
+    ping_command=(ping -n -c "$count" -W "$timeout_value" "$host")
+    timeout_budget=$((10#$count * 10#$timeout_value + 2))
+    ping_output="$(LC_ALL=C timeout --signal=TERM --kill-after=2s "$timeout_budget" "${ping_command[@]}" 2>&1)"
+    command_status=$?
+    CHECK_EXIT_CODE="$command_status"
+    if (( command_status != 0 )); then
+        CHECK_DETAIL="Ping ${host} unavailable; exit=${command_status}"
+        return 1
+    fi
+    packet_loss="$(printf '%s\n' "$ping_output" | awk 'match($0, /[0-9.]+% packet loss/) { value=substr($0, RSTART, RLENGTH); sub(/% packet loss$/, "", value); print value; exit }')"
+    if ! is_non_negative_number "$packet_loss"; then
+        CHECK_DETAIL="Ping ${host} succeeded but did not report packet loss"
+        return 1
+    fi
+    if ! LC_ALL=C awk -v loss="$packet_loss" -v maximum="$max_loss" 'BEGIN { exit !(loss <= maximum) }'; then
+        CHECK_DETAIL="Ping ${host}; packet_loss=${packet_loss}% exceeds max_packet_loss_percent=${max_loss}"
+        return 1
+    fi
+    rtt_line="$(printf '%s\n' "$ping_output" | awk '/^(rtt|round-trip) / { print; exit }')"
+    average=''
+    if [[ "$rtt_line" == *'= '* ]]; then
+        average="${rtt_line#*= }"
+        average="${average#*/}"
+        average="${average%%/*}"
+    fi
+    if [[ -n "$max_average" ]]; then
+        if ! is_non_negative_number "$average"; then
+            CHECK_DETAIL="Ping ${host} succeeded but did not report average RTT"
+            return 1
+        fi
+        if ! LC_ALL=C awk -v average="$average" -v maximum="$max_average" 'BEGIN { exit !(average <= maximum) }'; then
+            CHECK_DETAIL="Ping ${host}; avg_rtt=${average}ms exceeds max_avg_rtt_ms=${max_average}"
+            return 1
+        fi
+    fi
+    CHECK_DETAIL="Ping ${host}; packet_loss=${packet_loss}%${average:+; avg_rtt=${average}ms}"
+    return 0
+}
+
 run_configured_sequence() {
     local expression="$1"
     local label="$2"
@@ -489,6 +584,8 @@ perform_single_check() {
     case "$CURRENT_CHECK_TYPE" in
         http) check_http "$index" ;;
         tcp) check_tcp "$index" ;;
+        dns) check_dns ;;
+        ping) check_ping ;;
         command) check_command "$index" ;;
         disk) check_disk ;;
         tls_cert) check_tls_cert ;;
@@ -713,4 +810,3 @@ process_parallel_level() {
     (( ${#sequential_checks[@]} == 0 )) || collect_check_results sequential_checks
     for service_name in "${level_services[@]}"; do index="${SERVICE_INDEX[$service_name]}"; process_service "$index"; RESOLVED_STATE["$service_name"]="$PROCESS_RESULT"; history_capture_service "$service_name"; done
 }
-

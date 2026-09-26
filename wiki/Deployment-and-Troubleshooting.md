@@ -74,6 +74,37 @@ Complex YAML expressions, including unusual quoted map keys, keep using `yq`
 directly. This fallback preserves configuration semantics rather than trading
 correctness for an optimization.
 
+## Validate configuration in GitHub Actions
+
+The repository includes a self-contained Docker Action for pull-request and
+deployment validation. It runs only `service-watchdog.sh validate`; it does not
+perform health checks, remediation, notification delivery, or create runtime
+files.
+
+```yaml
+name: Validate Watchdog configuration
+
+on: [pull_request, push]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shellharbor/watchdog@v1
+        with:
+          config: monitoring/watchdog.yaml
+```
+
+`config` is relative to the checked-out workspace; paths outside it are
+rejected. The image includes yq v4 plus Watchdog's optional validation tools.
+It returns `0` for a valid file and `2` for a configuration error. An
+enforce-mode action policy that points at executables unique to a production
+host must also be validated on that target host before deployment.
+
 ## Developing the monitor source
 
 Production deployments still use the self-contained `service-watchdog.sh` file.
@@ -131,7 +162,8 @@ regression tests. Run the narrowest relevant test first, then broader coverage:
 ```bash
 bash ./scripts/build-watchdog.sh --check
 bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh
-shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh tests/*.sh
+bash -n scripts/github-action-entrypoint.sh
+shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh scripts/github-action-entrypoint.sh tests/*.sh
 bash ./tests/versioning.sh
 bash ./tests/run-all.sh
 ```
@@ -143,6 +175,8 @@ programs through PATH shims and temporary directories; follow that pattern when
 adding a new check, notification channel, or command. GitHub Actions runs this
 same suite on pushes and pull requests, and compiles every Bash source with the
 official `bash:4.3.48` container to protect the documented compatibility floor.
+The CI workflow also builds the public Docker Action and verifies valid and
+invalid configuration exit codes.
 
 ## Get help with useful evidence
 

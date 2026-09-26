@@ -187,7 +187,7 @@ usage() {
 Usage:
   ${SCRIPT_NAME} [-c /path/to/config.yaml] [-s service_name] [-n]
   ${SCRIPT_NAME} validate -c /path/to/config.yaml
-  ${SCRIPT_NAME} notify-test [-c FILE] [-s SERVICE] [--channel email|telegram|discord|slack|ntfy|all] [--event failure|recovery|escalation]
+  ${SCRIPT_NAME} notify-test [-c FILE] [-s SERVICE] [--channel email|telegram|discord|slack|ntfy|pagerduty|opsgenie|all] [--event failure|recovery|escalation]
   ${SCRIPT_NAME} status [-c FILE] [-s SERVICE] [--json] [--all]
   ${SCRIPT_NAME} --report daily|weekly|monthly [-c FILE]
   ${SCRIPT_NAME} --trend SERVICE [-c FILE]
@@ -742,23 +742,130 @@ security_policy_check_command() {
     return 1
 }
 
+validate_http_remediation_sequence() {
+    local expression="$1" description="$2"
+    local sequence_type sequence_count action_index action_type value value_type status_count status_index
+    local header_count header_index header_type header_name header_value_type header_env_type
+
+    sequence_type="$(yaml_read "${expression} | type")"
+    [[ "$sequence_type" == '!!seq' ]] || die "${description} must be a YAML array."
+    sequence_count="$(yaml_read "${expression} | length")"
+    (( sequence_count > 0 )) || die "${description} must not be empty."
+    for ((action_index = 0; action_index < sequence_count; action_index++)); do
+        action_type="$(yaml_read "${expression}[$action_index] | type")"
+        [[ "$action_type" == '!!map' ]] || die "${description}[$action_index] must be a map."
+        validate_string "${expression}[$action_index].url" "${description}[$action_index].url"
+        value="$(yaml_read "${expression}[$action_index].url")"
+        [[ "$value" =~ ^https?://[^[:space:]]+$ ]] || die "${description}[$action_index].url must be an HTTP(S) URL without spaces."
+        value="$(yaml_read "${expression}[$action_index].method // \"POST\"")"
+        case "$value" in POST|PUT|PATCH|DELETE) ;; *) die "${description}[$action_index].method must be POST, PUT, PATCH, or DELETE." ;; esac
+        value="$(yaml_read "${expression}[$action_index].timeout // ${DEFAULT_ACTION_TIMEOUT}")"
+        is_positive_integer "$value" || die "${description}[$action_index].timeout must be a positive integer."
+        value_type="$(yaml_read "${expression}[$action_index].success_status | type")"
+        if [[ "$value_type" != '!!null' ]]; then
+            [[ "$value_type" == '!!seq' ]] || die "${description}[$action_index].success_status must be an array."
+            status_count="$(yaml_read "${expression}[$action_index].success_status | length")"
+            (( status_count > 0 )) || die "${description}[$action_index].success_status must not be empty."
+            for ((status_index = 0; status_index < status_count; status_index++)); do
+                value="$(yaml_read "${expression}[$action_index].success_status[$status_index]")"
+                if ! [[ "$value" =~ ^[0-9]{3}$ ]] || (( 10#$value < 100 || 10#$value > 599 )); then
+                    die "${description}[$action_index].success_status[$status_index] must be an HTTP status from 100 to 599."
+                fi
+            done
+        fi
+        value_type="$(yaml_read "${expression}[$action_index].body | type")"
+        [[ "$value_type" == '!!null' || "$value_type" == '!!str' ]] || die "${description}[$action_index].body must be a string."
+        header_env_type="$(yaml_read "${expression}[$action_index].body_env | type")"
+        [[ "$header_env_type" == '!!null' || "$header_env_type" == '!!str' ]] || die "${description}[$action_index].body_env must be a string."
+        [[ "$value_type" == '!!null' || "$header_env_type" == '!!null' ]] || die "${description}[$action_index] must set only one of body or body_env."
+        if [[ "$header_env_type" != '!!null' ]]; then
+            value="$(yaml_read "${expression}[$action_index].body_env")"
+            [[ "$value" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "${description}[$action_index].body_env is not a valid environment variable name."
+        fi
+        value_type="$(yaml_read "${expression}[$action_index].headers | type")"
+        [[ "$value_type" == '!!null' ]] && continue
+        [[ "$value_type" == '!!seq' ]] || die "${description}[$action_index].headers must be an array."
+        header_count="$(yaml_read "${expression}[$action_index].headers | length")"
+        for ((header_index = 0; header_index < header_count; header_index++)); do
+            header_type="$(yaml_read "${expression}[$action_index].headers[$header_index] | type")"
+            [[ "$header_type" == '!!map' ]] || die "${description}[$action_index].headers[$header_index] must be a map."
+            validate_string "${expression}[$action_index].headers[$header_index].name" "${description}[$action_index].headers[$header_index].name"
+            header_name="$(yaml_read "${expression}[$action_index].headers[$header_index].name")"
+            [[ -n "$header_name" && "$header_name" != *[$' \t\r\n:']* ]] || die "${description}[$action_index].headers[$header_index].name must be a non-empty HTTP header name."
+            header_value_type="$(yaml_read "${expression}[$action_index].headers[$header_index].value | type")"
+            header_env_type="$(yaml_read "${expression}[$action_index].headers[$header_index].value_env | type")"
+            [[ "$header_value_type" == '!!null' || "$header_value_type" == '!!str' ]] || die "${description}[$action_index].headers[$header_index].value must be a string."
+            [[ "$header_env_type" == '!!null' || "$header_env_type" == '!!str' ]] || die "${description}[$action_index].headers[$header_index].value_env must be a string."
+            [[ "$header_value_type" == '!!null' || "$header_env_type" == '!!null' ]] || die "${description}[$action_index].headers[$header_index] must set only one of value or value_env."
+            [[ "$header_value_type" != '!!null' || "$header_env_type" != '!!null' ]] || die "${description}[$action_index].headers[$header_index] needs value or value_env."
+            if [[ "$header_value_type" != '!!null' ]]; then
+                value="$(yaml_read "${expression}[$action_index].headers[$header_index].value")"
+                [[ "$value" != *$'\r'* && "$value" != *$'\n'* ]] || die "${description}[$action_index].headers[$header_index].value must not contain a newline."
+            else
+                value="$(yaml_read "${expression}[$action_index].headers[$header_index].value_env")"
+                [[ "$value" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "${description}[$action_index].headers[$header_index].value_env is not a valid environment variable name."
+            fi
+        done
+    done
+}
+
+validate_http_remediation_allowlist() {
+    local expression='.security.remediation_policy.allowed_http' entry_count entry_index entry_type method url
+    local sequence_type
+
+    sequence_type="$(yaml_read "${expression} | type")"
+    [[ "$sequence_type" == '!!seq' ]] || die "${expression} must be a YAML array."
+    entry_count="$(yaml_read "${expression} | length")"
+    (( entry_count > 0 )) || die "${expression} must not be empty."
+    for ((entry_index = 0; entry_index < entry_count; entry_index++)); do
+        entry_type="$(yaml_read "${expression}[$entry_index] | type")"
+        [[ "$entry_type" == '!!map' ]] || die "${expression}[$entry_index] must be a map."
+        method="$(yaml_read "${expression}[$entry_index].method")"
+        case "$method" in POST|PUT|PATCH|DELETE) ;; *) die "${expression}[$entry_index].method must be POST, PUT, PATCH, or DELETE." ;; esac
+        validate_string "${expression}[$entry_index].url" "${expression}[$entry_index].url"
+        url="$(yaml_read "${expression}[$entry_index].url")"
+        [[ "$url" =~ ^https?://[^[:space:]]+$ ]] || die "${expression}[$entry_index].url must be an HTTP(S) URL without spaces."
+    done
+}
+
+security_policy_check_http() {
+    local method="$1" url="$2" allow_count allow_index allowed_method allowed_url
+
+    [[ "$(yaml_read '.security.remediation_policy.mode // "legacy"')" == enforce ]] || return 0
+    allow_count="$(yaml_read '.security.remediation_policy.allowed_http | length')"
+    for ((allow_index = 0; allow_index < allow_count; allow_index++)); do
+        allowed_method="$(yaml_read ".security.remediation_policy.allowed_http[$allow_index].method")"
+        allowed_url="$(yaml_read ".security.remediation_policy.allowed_http[$allow_index].url")"
+        [[ "$method" == "$allowed_method" && "$url" == "$allowed_url" ]] && return 0
+    done
+    return 1
+}
+
 validate_security_policy() {
-    local mode policy_type count index service_count command_count expression description
+    local mode policy_type count index service_count command_count http_count expression description allowed_commands_type allowed_http_type
     local -a candidate=()
     policy_type="$(yaml_read '.security.remediation_policy | type')"
     [[ "$policy_type" == '!!null' || "$policy_type" == '!!map' ]] || die 'security.remediation_policy must be a map.'
     mode="$(yaml_read '.security.remediation_policy.mode // "legacy"')"
     [[ "$mode" == legacy || "$mode" == enforce ]] || die 'security.remediation_policy.mode must be legacy or enforce.'
+    allowed_commands_type="$(yaml_read '.security.remediation_policy.allowed_commands | type')"
+    allowed_http_type="$(yaml_read '.security.remediation_policy.allowed_http | type')"
+    [[ "$allowed_commands_type" == '!!null' || "$allowed_commands_type" == '!!seq' ]] || die 'security.remediation_policy.allowed_commands must be a YAML array.'
+    [[ "$allowed_http_type" == '!!null' || "$allowed_http_type" == '!!seq' ]] || die 'security.remediation_policy.allowed_http must be a YAML array.'
+    [[ "$allowed_http_type" != '!!null' ]] && validate_http_remediation_allowlist
     [[ "$mode" == enforce ]] || return 0
-    require_command realpath
-    require_command head
-    validate_command_sequence '.security.remediation_policy.allowed_commands' 'security.remediation_policy.allowed_commands'
-    count="$(yaml_read '.security.remediation_policy.allowed_commands | length')"
-    for ((index = 0; index < count; index++)); do
-        load_command ".security.remediation_policy.allowed_commands[$index].command" candidate
-        security_policy_check_command candidate ||
-            die "security.remediation_policy.allowed_commands[$index].command is unsafe or not an exact allowlist entry."
-    done
+    [[ "$allowed_commands_type" != '!!null' || "$allowed_http_type" != '!!null' ]] || die 'security.remediation_policy.mode=enforce needs allowed_commands or allowed_http.'
+    if [[ "$allowed_commands_type" != '!!null' ]]; then
+        require_command realpath
+        require_command head
+        validate_command_sequence '.security.remediation_policy.allowed_commands' 'security.remediation_policy.allowed_commands'
+        count="$(yaml_read '.security.remediation_policy.allowed_commands | length')"
+        for ((index = 0; index < count; index++)); do
+            load_command ".security.remediation_policy.allowed_commands[$index].command" candidate
+            security_policy_check_command candidate ||
+                die "security.remediation_policy.allowed_commands[$index].command is unsafe or not an exact allowlist entry."
+        done
+    fi
     service_count="$(yaml_read '.services | length')"
     for ((index = 0; index < service_count; index++)); do
         for description in actions.commands escalation.actions.commands; do
@@ -769,6 +876,12 @@ validate_security_policy() {
                 security_policy_check_command candidate ||
                     die "${expression}[$count].command is not allowed by security.remediation_policy."
             done
+        done
+        expression=".services[$index].actions.http"
+        http_count="$(yaml_read "${expression} // [] | length")"
+        for ((count = 0; count < http_count; count++)); do
+            security_policy_check_http "$(yaml_read "${expression}[$count].method // \"POST\"")" "$(yaml_read "${expression}[$count].url")" ||
+                die "${expression}[$count] is not allowed by security.remediation_policy.allowed_http."
         done
     done
 }
@@ -862,7 +975,7 @@ validate_webhook_configuration() {
     [[ "$webhooks_type" == "!!null" ]] && return 0
     [[ "$webhooks_type" == "!!map" ]] || die "notifications.webhooks must be a YAML map."
 
-    for webhook in telegram discord slack ntfy; do
+    for webhook in telegram discord slack ntfy pagerduty opsgenie; do
         value_type="$(yaml_read ".notifications.webhooks.${webhook} | type")"
         [[ "$value_type" == "!!null" ]] && continue
         [[ "$value_type" == "!!map" ]] || die "notifications.webhooks.${webhook} must be a YAML map."
@@ -909,6 +1022,20 @@ validate_webhook_configuration() {
                 priority="$(yaml_read '.notifications.webhooks.ntfy.priority // "default"')"
                 [[ "$priority" =~ ^[1-5]$ || "$priority" =~ ^(min|low|default|high|urgent|max)$ ]] ||
                     die "notifications.webhooks.ntfy.priority must be 1-5, min, low, default, high, urgent, or max."
+                ;;
+            pagerduty)
+                validate_string '.notifications.webhooks.pagerduty.routing_key_env' 'notifications.webhooks.pagerduty.routing_key_env'
+                env_name="$(yaml_read '.notifications.webhooks.pagerduty.routing_key_env')"
+                [[ "$env_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+                    die "notifications.webhooks.pagerduty.routing_key_env is not a valid environment variable name."
+                ;;
+            opsgenie)
+                validate_string '.notifications.webhooks.opsgenie.api_key_env' 'notifications.webhooks.opsgenie.api_key_env'
+                env_name="$(yaml_read '.notifications.webhooks.opsgenie.api_key_env')"
+                [[ "$env_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] ||
+                    die "notifications.webhooks.opsgenie.api_key_env is not a valid environment variable name."
+                value="$(yaml_read '.notifications.webhooks.opsgenie.region // "us"')"
+                [[ "$value" == us || "$value" == eu ]] || die 'notifications.webhooks.opsgenie.region must be us or eu.'
                 ;;
         esac
 
@@ -1575,6 +1702,55 @@ validate_check_definition() {
                 die "${description}.port must be from 1 through 65535."
             fi
             ;;
+        dns)
+            validate_string "${expression}.name" "${description}.name"
+            value="$(yaml_read "${expression}.name")"
+            [[ -n "$value" && "$value" != *[[:space:]]* ]] || die "${description}.name must not be empty or contain spaces."
+            value="$(yaml_read "${expression}.record_type // \"A\"")"
+            case "$value" in A|AAAA|CNAME|MX|NS|TXT) ;; *) die "${description}.record_type must be A, AAAA, CNAME, MX, NS, or TXT." ;; esac
+            value_type="$(yaml_read "${expression}.resolver | type")"
+            if [[ "$value_type" != '!!null' ]]; then
+                validate_string "${expression}.resolver" "${description}.resolver"
+                value="$(yaml_read "${expression}.resolver")"
+                [[ -n "$value" && "$value" != *[[:space:]]* ]] || die "${description}.resolver must not be empty or contain spaces."
+            fi
+            value="$(yaml_read "${expression}.min_answers // 1")"
+            if ! is_positive_integer "$value" || (( 10#$value > 100 )); then
+                die "${description}.min_answers must be from 1 to 100."
+            fi
+            value_type="$(yaml_read "${expression}.expected_answers | type")"
+            if [[ "$value_type" != '!!null' ]]; then
+                [[ "$value_type" == '!!seq' ]] || die "${description}.expected_answers must be an array."
+                status_count="$(yaml_read "${expression}.expected_answers | length")"
+                (( status_count > 0 )) || die "${description}.expected_answers must not be empty."
+                for ((status_index = 0; status_index < status_count; status_index++)); do
+                    validate_string "${expression}.expected_answers[$status_index]" "${description}.expected_answers[$status_index]"
+                    value="$(yaml_read "${expression}.expected_answers[$status_index]")"
+                    [[ -n "$value" && "$value" != *$'\r'* && "$value" != *$'\n'* ]] || die "${description}.expected_answers[$status_index] must be a non-empty single line."
+                done
+            fi
+            command -v dig >/dev/null 2>&1 || die "${description}.type=dns requires dig in PATH."
+            ;;
+        ping)
+            validate_string "${expression}.host" "${description}.host"
+            value="$(yaml_read "${expression}.host")"
+            [[ -n "$value" && "$value" != *[[:space:]]* ]] || die "${description}.host must not be empty or contain spaces."
+            value="$(yaml_read "${expression}.count // 1")"
+            if ! is_positive_integer "$value" || (( 10#$value > 10 )); then
+                die "${description}.count must be from 1 to 10."
+            fi
+            for field in max_packet_loss_percent max_avg_rtt_ms; do
+                value_type="$(yaml_read "${expression}.${field} | type")"
+                [[ "$value_type" == '!!null' ]] && continue
+                [[ "$value_type" == '!!int' || "$value_type" == '!!float' ]] || die "${description}.${field} must be a number."
+                value="$(yaml_read "${expression}.${field}")"
+                is_non_negative_number "$value" || die "${description}.${field} must be non-negative."
+                if [[ "$field" == max_packet_loss_percent ]] && ! LC_ALL=C awk -v threshold="$value" 'BEGIN { exit !(threshold <= 100) }'; then
+                    die "${description}.max_packet_loss_percent must not exceed 100."
+                fi
+            done
+            command -v ping >/dev/null 2>&1 || die "${description}.type=ping requires ping in PATH."
+            ;;
         command)
             validate_command_sequence "${expression}.commands" "${description}.commands"
             ;;
@@ -1637,7 +1813,7 @@ validate_check_definition() {
             case "$value" in '>'|'>='|'<'|'<='|'=='|'!=') ;; *) die "${description}.comparator must be >, >=, <, <=, ==, or !=." ;; esac
             validate_threshold_source "${expression}.source" "${description}.source"
             ;;
-        *) die "${description}.type must be http, tcp, command, disk, tls_cert, clamav, or threshold." ;;
+        *) die "${description}.type must be http, tcp, dns, ping, command, disk, tls_cert, clamav, or threshold." ;;
     esac
     for field in timeout attempts retry_delay; do
         case "$field" in
@@ -1707,6 +1883,11 @@ validate_configuration() {
         if [[ "$actions_type" != "!!null" ]]; then
             validate_command_sequence ".services[$index].actions.commands" \
                 "Service '${name}': actions.commands" true
+        fi
+        actions_type="$(yaml_read ".services[$index].actions.http | type")"
+        if [[ "$actions_type" != "!!null" ]]; then
+            validate_http_remediation_sequence ".services[$index].actions.http" \
+                "services[$index].actions.http"
         fi
         value="$(yaml_read ".services[$index].actions.cooldown // ${DEFAULT_ACTION_COOLDOWN}")"
         is_non_negative_integer "$value" ||
@@ -2274,6 +2455,9 @@ webhook_template() {
         ntfy:circuit_open) fallback='⚠️ CIRCUIT BREAKER OPEN: {{service}}' ;;
         ntfy:circuit_close) fallback='✅ CIRCUIT BREAKER CLOSED: {{service}}' ;;
         ntfy:flapping) fallback='⚠️ FLAPPING: {{service}} is unstable; automatic remediation paused.' ;;
+        pagerduty:failure|opsgenie:failure) fallback='{{service}} unavailable: {{detail}}' ;;
+        pagerduty:recovery|opsgenie:recovery) fallback='{{service}} recovered after {{incident_duration_seconds}}s ({{remediation_result}})' ;;
+        pagerduty:escalation|opsgenie:escalation) fallback='ESCALATION: {{service}} has been unavailable for {{consecutive_unavailable}} consecutive checks.' ;;
         *) return 1 ;;
     esac
     value_type="$(yaml_read ".notifications.webhooks.${webhook}.template.${event} | type")"
@@ -2285,15 +2469,27 @@ webhook_template() {
     printf '%s' "$value"
 }
 
+oncall_incident_key() {
+    local incident_id="$INCIDENT_ID"
+    [[ -n "$incident_id" ]] || incident_id="${CURRENT_SERVICE}-untracked"
+    printf 'watchdog-%s' "$incident_id"
+}
+
+oncall_provider_handles_event() {
+    case "$1" in failure|recovery|escalation) return 0 ;; *) return 1 ;; esac
+}
+
 send_single_webhook() {
     local webhook="$1" event="$2" env_name="" secret="" url="" template text timestamp
-    local response_file response http_status curl_status thread_id priority error_file error_text
+    local response_file response http_status curl_status thread_id priority error_file error_text payload_file='' secret_config=''
     local -a curl_command
 
     case "$webhook" in
         telegram) env_name="$(yaml_read '.notifications.webhooks.telegram.bot_token_env')" ;;
         discord|slack) env_name="$(yaml_read ".notifications.webhooks.${webhook}.webhook_url_env")" ;;
         ntfy) env_name="$(yaml_read '.notifications.webhooks.ntfy.token_env // ""')" ;;
+        pagerduty) env_name="$(yaml_read '.notifications.webhooks.pagerduty.routing_key_env')" ;;
+        opsgenie) env_name="$(yaml_read '.notifications.webhooks.opsgenie.api_key_env')" ;;
     esac
     if [[ -n "$env_name" ]]; then
         secret="${!env_name:-}"
@@ -2353,6 +2549,76 @@ send_single_webhook() {
             fi
             [[ -z "$secret" ]] || curl_command+=(--header "Authorization: Bearer ${secret}")
             ;;
+        pagerduty)
+            text="$(render_webhook_template plain "$template" "$event" "$timestamp")"
+            (( NOTIFY_TEST_MODE == 0 )) || text="[TEST] ${text}"
+            url='https://events.pagerduty.com/v2/enqueue'
+            case "$event" in
+                recovery)
+                    text="$(printf '{"routing_key":"%s","event_action":"resolve","dedup_key":"%s"}' \
+                        "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")")"
+                    ;;
+                escalation)
+                    text="$(printf '{"routing_key":"%s","event_action":"trigger","dedup_key":"%s","payload":{"summary":"%s","source":"%s","severity":"critical"}}' \
+                        "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")" "$(escape_json "$CURRENT_SERVICE")")"
+                    ;;
+                *)
+                    text="$(printf '{"routing_key":"%s","event_action":"trigger","dedup_key":"%s","payload":{"summary":"%s","source":"%s","severity":"error"}}' \
+                        "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")" "$(escape_json "$CURRENT_SERVICE")")"
+                    ;;
+            esac
+            payload_file="$(mktemp "${TEMP_DIRECTORY}/pagerduty-payload.XXXXXX")" || {
+                log ERROR "service=${CURRENT_SERVICE} webhook=pagerduty result=webhook-failed reason=payload-file-create event=${event}"
+                return 1
+            }
+            chmod 0600 "$payload_file" 2>/dev/null || true
+            if ! printf '%s' "$text" >"$payload_file"; then
+                rm -f -- "$payload_file"
+                log ERROR "service=${CURRENT_SERVICE} webhook=pagerduty result=webhook-failed reason=payload-file-write event=${event}"
+                return 1
+            fi
+            curl_command+=(--request POST --header 'Content-Type: application/json' --data-binary "@${payload_file}")
+            ;;
+        opsgenie)
+            text="$(render_webhook_template plain "$template" "$event" "$timestamp")"
+            (( NOTIFY_TEST_MODE == 0 )) || text="[TEST] ${text}"
+            if [[ "$(yaml_read '.notifications.webhooks.opsgenie.region // "us"')" == eu ]]; then
+                url='https://api.eu.opsgenie.com/v2/alerts'
+            else
+                url='https://api.opsgenie.com/v2/alerts'
+            fi
+            case "$event" in
+                recovery)
+                    url+="/$(oncall_incident_key)/close?identifierType=alias"
+                    text="$(printf '{"source":"watchdog","note":"%s"}' "$(escape_json "$text")")"
+                    ;;
+                escalation)
+                    text="$(printf '{"message":"%s","alias":"%s","description":"%s","priority":"P1","source":"watchdog"}' \
+                        "$(escape_json "${text:0:130}")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")")"
+                    ;;
+                *)
+                    text="$(printf '{"message":"%s","alias":"%s","description":"%s","priority":"P2","source":"watchdog"}' \
+                        "$(escape_json "${text:0:130}")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")")"
+                    ;;
+            esac
+            payload_file="$(mktemp "${TEMP_DIRECTORY}/opsgenie-payload.XXXXXX")" || {
+                log ERROR "service=${CURRENT_SERVICE} webhook=opsgenie result=webhook-failed reason=payload-file-create event=${event}"
+                return 1
+            }
+            secret_config="$(mktemp "${TEMP_DIRECTORY}/opsgenie-auth.XXXXXX")" || {
+                rm -f -- "$payload_file"
+                log ERROR "service=${CURRENT_SERVICE} webhook=opsgenie result=webhook-failed reason=auth-file-create event=${event}"
+                return 1
+            }
+            chmod 0600 "$payload_file" "$secret_config" 2>/dev/null || true
+            if ! printf '%s' "$text" >"$payload_file" ||
+                ! printf 'header = "%s"\n' "$(escape_curl_config_value "Authorization: GenieKey ${secret}")" >"$secret_config"; then
+                rm -f -- "$payload_file" "$secret_config"
+                log ERROR "service=${CURRENT_SERVICE} webhook=opsgenie result=webhook-failed reason=request-file-write event=${event}"
+                return 1
+            fi
+            curl_command+=(--request POST --header 'Content-Type: application/json' --config "$secret_config" --data-binary "@${payload_file}")
+            ;;
     esac
 
     if (( NOTIFY_TEST_MODE == 1 )); then
@@ -2366,6 +2632,7 @@ send_single_webhook() {
     error_text=""; [[ -z "${error_file:-}" || ! -s "$error_file" ]] || error_text="$(<"$error_file")"
     rm -f -- "$response_file"
     [[ -z "${error_file:-}" ]] || rm -f -- "$error_file"
+    rm -f -- "$payload_file" "$secret_config"
     if (( curl_status == 0 )) && [[ "$http_status" =~ ^2[0-9][0-9]$ ]]; then
         if [[ "$webhook" != telegram || "$response" =~ \"ok\"[[:space:]]*:[[:space:]]*true ]]; then
             if (( NOTIFY_TEST_MODE == 1 )); then
@@ -2393,9 +2660,10 @@ send_single_webhook() {
 
 send_webhook_notification() {
     local event="$1" webhook enabled failed=0
-    for webhook in telegram discord slack ntfy; do
+    for webhook in telegram discord slack ntfy pagerduty opsgenie; do
         enabled="$(yaml_read ".notifications.webhooks.${webhook}.enabled // false")"
         [[ "$enabled" == true ]] || continue
+        oncall_provider_handles_event "$event" || [[ "$webhook" != pagerduty && "$webhook" != opsgenie ]] || continue
         send_single_webhook "$webhook" "$event" || failed=1
     done
     return "$failed"
@@ -2404,8 +2672,9 @@ send_webhook_notification() {
 log_notification_plan() {
     local service_name="$1" event="$2" webhook
     (( EMAIL_ENABLED == 0 )) || log INFO "service=${service_name} action=email result=would-send event=${event}"
-    for webhook in telegram discord slack ntfy; do
+    for webhook in telegram discord slack ntfy pagerduty opsgenie; do
         if [[ "$(yaml_read ".notifications.webhooks.${webhook}.enabled // false")" == true ]]; then
+            oncall_provider_handles_event "$event" || [[ "$webhook" != pagerduty && "$webhook" != opsgenie ]] || continue
             log INFO "service=${service_name} action=webhook result=would-send provider=${webhook} event=${event}"
         fi
     done
@@ -2544,7 +2813,6 @@ send_email_notification() {
     fi
     send_email_message "$event" "$subject" "$body"
 }
-
 http_status_is_successful() {
     local index="$1"
     local status="$2"
@@ -2684,6 +2952,101 @@ check_tcp() {
     fi
     CHECK_DETAIL="TCP ${host}:${port} unavailable; exit=${command_status}"
     return 1
+}
+
+check_dns() {
+    local name record_type resolver timeout_value min_answers expected_count expected_index expected answer_count=0
+    local output_file command_status answer_preview=''
+    local -a dig_command
+
+    name="$(yaml_read "${CHECK_CONFIG_PATH}.name")"
+    record_type="$(yaml_read "${CHECK_CONFIG_PATH}.record_type // \"A\"")"
+    resolver="$(yaml_read "${CHECK_CONFIG_PATH}.resolver // \"\"")"
+    timeout_value="$(yaml_read "${CHECK_CONFIG_PATH}.timeout // ${DEFAULT_TIMEOUT}")"
+    min_answers="$(yaml_read "${CHECK_CONFIG_PATH}.min_answers // 1")"
+    CHECK_HTTP_STATUS=''
+    output_file="${TEMP_DIRECTORY}/dns-${RANDOM}.out"
+    dig_command=(dig "+time=${timeout_value}" +tries=1 +short)
+    [[ -z "$resolver" ]] || dig_command+=("@${resolver}")
+    dig_command+=("$name" "$record_type")
+    timeout --signal=TERM --kill-after=2s "$timeout_value" "${dig_command[@]}" >"$output_file" 2>/dev/null
+    command_status=$?
+    CHECK_EXIT_CODE="$command_status"
+    if (( command_status != 0 )); then
+        rm -f -- "$output_file"
+        CHECK_DETAIL="DNS ${name} ${record_type} query failed; exit=${command_status}"
+        return 1
+    fi
+    while IFS= read -r expected; do
+        [[ -z "$expected" ]] || answer_count=$((answer_count + 1))
+    done <"$output_file"
+    if (( answer_count < 10#$min_answers )); then
+        rm -f -- "$output_file"
+        CHECK_DETAIL="DNS ${name} ${record_type}; answers=${answer_count} below min_answers=${min_answers}"
+        return 1
+    fi
+    expected_count="$(yaml_read "${CHECK_CONFIG_PATH}.expected_answers // [] | length")"
+    for ((expected_index = 0; expected_index < expected_count; expected_index++)); do
+        expected="$(yaml_read "${CHECK_CONFIG_PATH}.expected_answers[$expected_index]")"
+        if ! grep -F -x -- "$expected" "$output_file" >/dev/null; then
+            rm -f -- "$output_file"
+            CHECK_DETAIL="DNS ${name} ${record_type}; expected answer missing"
+            return 1
+        fi
+    done
+    answer_preview="$(head -n 1 -- "$output_file" 2>/dev/null)"
+    rm -f -- "$output_file"
+    CHECK_DETAIL="DNS ${name} ${record_type}; answers=${answer_count}${answer_preview:+; first=${answer_preview}}"
+    return 0
+}
+
+check_ping() {
+    local host count timeout_value timeout_budget max_loss max_average ping_output command_status packet_loss average rtt_line
+    local -a ping_command
+
+    host="$(yaml_read "${CHECK_CONFIG_PATH}.host")"
+    count="$(yaml_read "${CHECK_CONFIG_PATH}.count // 1")"
+    timeout_value="$(yaml_read "${CHECK_CONFIG_PATH}.timeout // ${DEFAULT_TIMEOUT}")"
+    max_loss="$(yaml_read "${CHECK_CONFIG_PATH}.max_packet_loss_percent // 0")"
+    max_average="$(yaml_read "${CHECK_CONFIG_PATH}.max_avg_rtt_ms // \"\"")"
+    CHECK_HTTP_STATUS=''
+    ping_command=(ping -n -c "$count" -W "$timeout_value" "$host")
+    timeout_budget=$((10#$count * 10#$timeout_value + 2))
+    ping_output="$(LC_ALL=C timeout --signal=TERM --kill-after=2s "$timeout_budget" "${ping_command[@]}" 2>&1)"
+    command_status=$?
+    CHECK_EXIT_CODE="$command_status"
+    if (( command_status != 0 )); then
+        CHECK_DETAIL="Ping ${host} unavailable; exit=${command_status}"
+        return 1
+    fi
+    packet_loss="$(printf '%s\n' "$ping_output" | awk 'match($0, /[0-9.]+% packet loss/) { value=substr($0, RSTART, RLENGTH); sub(/% packet loss$/, "", value); print value; exit }')"
+    if ! is_non_negative_number "$packet_loss"; then
+        CHECK_DETAIL="Ping ${host} succeeded but did not report packet loss"
+        return 1
+    fi
+    if ! LC_ALL=C awk -v loss="$packet_loss" -v maximum="$max_loss" 'BEGIN { exit !(loss <= maximum) }'; then
+        CHECK_DETAIL="Ping ${host}; packet_loss=${packet_loss}% exceeds max_packet_loss_percent=${max_loss}"
+        return 1
+    fi
+    rtt_line="$(printf '%s\n' "$ping_output" | awk '/^(rtt|round-trip) / { print; exit }')"
+    average=''
+    if [[ "$rtt_line" == *'= '* ]]; then
+        average="${rtt_line#*= }"
+        average="${average#*/}"
+        average="${average%%/*}"
+    fi
+    if [[ -n "$max_average" ]]; then
+        if ! is_non_negative_number "$average"; then
+            CHECK_DETAIL="Ping ${host} succeeded but did not report average RTT"
+            return 1
+        fi
+        if ! LC_ALL=C awk -v average="$average" -v maximum="$max_average" 'BEGIN { exit !(average <= maximum) }'; then
+            CHECK_DETAIL="Ping ${host}; avg_rtt=${average}ms exceeds max_avg_rtt_ms=${max_average}"
+            return 1
+        fi
+    fi
+    CHECK_DETAIL="Ping ${host}; packet_loss=${packet_loss}%${average:+; avg_rtt=${average}ms}"
+    return 0
 }
 
 run_configured_sequence() {
@@ -3036,6 +3399,8 @@ perform_single_check() {
     case "$CURRENT_CHECK_TYPE" in
         http) check_http "$index" ;;
         tcp) check_tcp "$index" ;;
+        dns) check_dns ;;
+        ping) check_ping ;;
         command) check_command "$index" ;;
         disk) check_disk ;;
         tls_cert) check_tls_cert ;;
@@ -3260,7 +3625,6 @@ process_parallel_level() {
     (( ${#sequential_checks[@]} == 0 )) || collect_check_results sequential_checks
     for service_name in "${level_services[@]}"; do index="${SERVICE_INDEX[$service_name]}"; process_service "$index"; RESOLVED_STATE["$service_name"]="$PROCESS_RESULT"; history_capture_service "$service_name"; done
 }
-
 read_state() {
     local service_name="$1"
     local file="${STATE_DIRECTORY}/${service_name}.state" state=""
@@ -3750,6 +4114,113 @@ record_action_attempt() {
     mv -f -- "$temporary" "$file" || die "Cannot update action state: ${file}"
     increment_service_marker_number "$service_name" remediations-total
     incident_update "$service_name" "$(read_state "$service_name")" attempt pending
+}
+
+http_remediation_status_is_successful() {
+    local expression="$1" status="$2" count index expected
+    count="$(yaml_read "${expression}.success_status // [] | length")"
+    if (( count == 0 )); then
+        [[ "$status" =~ ^2[0-9][0-9]$ ]]
+        return
+    fi
+    for ((index = 0; index < count; index++)); do
+        expected="$(yaml_read "${expression}.success_status[$index]")"
+        [[ "$status" == "$expected" ]] && return 0
+    done
+    return 1
+}
+
+log_http_remediation_plan() {
+    local expression="$1" service_name="$2" count index method
+    count="$(yaml_read "${expression} // [] | length")"
+    for ((index = 0; index < count; index++)); do
+        method="$(yaml_read "${expression}[$index].method // \"POST\"")"
+        log INFO "service=${service_name} action=remediation-http index=${index} result=would-run method=${method}"
+    done
+}
+
+run_http_remediation_sequence() {
+    local expression="$1" service_name="$2"
+    local count index action_path method url timeout_value header_count header_index header_name header_value header_env body body_env
+    local body_type curl_config body_file http_status curl_status
+    local -a curl_command
+
+    count="$(yaml_read "${expression} // [] | length")"
+    (( count > 0 )) || return 0
+    for ((index = 0; index < count; index++)); do
+        action_path="${expression}[$index]"
+        method="$(yaml_read "${action_path}.method // \"POST\"")"
+        url="$(yaml_read "${action_path}.url")"
+        if ! security_policy_check_http "$method" "$url"; then
+            log ERROR "service=${service_name} action=remediation-http index=${index} result=blocked reason=security_policy"
+            return 1
+        fi
+        timeout_value="$(yaml_read "${action_path}.timeout // ${DEFAULT_ACTION_TIMEOUT}")"
+        curl_command=(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --request "$method" --connect-timeout "$timeout_value" --max-time "$timeout_value")
+        curl_config="$(mktemp "${TEMP_DIRECTORY}/remediation-http-config.XXXXXX")" || {
+            log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=config-file-create"
+            return 1
+        }
+        chmod 0600 "$curl_config" 2>/dev/null || true
+        header_count="$(yaml_read "${action_path}.headers // [] | length")"
+        for ((header_index = 0; header_index < header_count; header_index++)); do
+            header_name="$(yaml_read "${action_path}.headers[$header_index].name")"
+            header_env="$(yaml_read "${action_path}.headers[$header_index].value_env // \"\"")"
+            if [[ -n "$header_env" ]]; then
+                header_value="${!header_env:-}"
+                if [[ -z "$header_value" || "$header_value" == *$'\r'* || "$header_value" == *$'\n'* ]]; then
+                    rm -f -- "$curl_config"
+                    log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=invalid-or-missing-env:${header_env}"
+                    return 1
+                fi
+            else
+                header_value="$(yaml_read "${action_path}.headers[$header_index].value")"
+            fi
+            if ! printf 'header = "%s"\n' "$(escape_curl_config_value "${header_name}: ${header_value}")" >>"$curl_config"; then
+                rm -f -- "$curl_config"
+                log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=config-file-write"
+                return 1
+            fi
+        done
+        curl_command+=(--config "$curl_config")
+        body_file=''
+        body_type="$(yaml_read "${action_path}.body | type")"
+        body_env="$(yaml_read "${action_path}.body_env // \"\"")"
+        if [[ "$body_type" != '!!null' || -n "$body_env" ]]; then
+            if [[ -n "$body_env" ]]; then
+                body="${!body_env:-}"
+                if [[ -z "$body" ]]; then
+                    rm -f -- "$curl_config"
+                    log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=missing-env:${body_env}"
+                    return 1
+                fi
+            else
+                body="$(yaml_read "${action_path}.body")"
+            fi
+            body_file="$(mktemp "${TEMP_DIRECTORY}/remediation-http-body.XXXXXX")" || {
+                rm -f -- "$curl_config"
+                log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=body-file-create"
+                return 1
+            }
+            chmod 0600 "$body_file" 2>/dev/null || true
+            if ! printf '%s' "$body" >"$body_file"; then
+                rm -f -- "$curl_config" "$body_file"
+                log ERROR "service=${service_name} action=remediation-http index=${index} result=failed reason=body-file-write"
+                return 1
+            fi
+            curl_command+=(--data-binary "@${body_file}")
+        fi
+        http_status="$("${curl_command[@]}" "$url" 2>/dev/null)"
+        curl_status=$?
+        rm -f -- "$curl_config" "$body_file"
+        if (( curl_status == 0 )) && http_remediation_status_is_successful "$action_path" "$http_status"; then
+            log INFO "service=${service_name} action=remediation-http index=${index} result=sent method=${method} http_status=${http_status}"
+            continue
+        fi
+        log ERROR "service=${service_name} action=remediation-http index=${index} result=failed method=${method} curl_exit=${curl_status} http_status=${http_status:-000}"
+        return 1
+    done
+    return 0
 }
 
 maintenance_marker_file() {
@@ -4685,7 +5156,7 @@ service_is_required_for() {
 
 process_service() {
     local index="$1"
-    local enabled actions_count verify_after action_due=0 half_open_attempt=0 initial_check_healthy=0 initial_check_degraded=0 has_readiness=0
+    local enabled actions_count command_actions_count http_actions_count verify_after action_due=0 half_open_attempt=0 initial_check_healthy=0 initial_check_degraded=0 has_readiness=0
     CURRENT_SERVICE="$(yaml_read ".services[$index].name")"
     if [[ "$(yaml_read ".services[$index].health | type")" == '!!map' ]]; then
         has_readiness=1
@@ -4796,7 +5267,9 @@ process_service() {
     fi
 
     update_maintenance_status "$CURRENT_SERVICE"
-    actions_count="$(yaml_read ".services[$index].actions.commands // [] | length")"
+    command_actions_count="$(yaml_read ".services[$index].actions.commands // [] | length")"
+    http_actions_count="$(yaml_read ".services[$index].actions.http // [] | length")"
+    actions_count=$((command_actions_count + http_actions_count))
     if (( actions_count == 0 )); then
         CURRENT_ACTION_STATUS="not-configured"
     elif (( MAINTENANCE_ACTIVE == 1 )); then
@@ -4839,7 +5312,8 @@ process_service() {
         if (( DRY_RUN == 1 )); then
             if (( action_due == 1 )); then
                 log WARN "service=${CURRENT_SERVICE} action=remediation result=would-run reason=dry-run commands=${actions_count}"
-                log_configured_sequence_plan ".services[$index].actions.commands" remediation "$CURRENT_SERVICE"
+                (( command_actions_count == 0 )) || log_configured_sequence_plan ".services[$index].actions.commands" remediation "$CURRENT_SERVICE"
+                (( http_actions_count == 0 )) || log_http_remediation_plan ".services[$index].actions.http" "$CURRENT_SERVICE"
             else
                 log WARN "service=${CURRENT_SERVICE} action=remediation result=skipped reason=${CURRENT_ACTION_STATUS} dry_run=true"
             fi
@@ -4848,11 +5322,18 @@ process_service() {
         elif (( action_due == 1 )); then
             ACTION_ATTEMPTED=1
             record_action_attempt "$CURRENT_SERVICE"
-            log WARN "service=${CURRENT_SERVICE} action=remediation-start commands=${actions_count}"
-            if run_configured_sequence ".services[$index].actions.commands" remediation "$CURRENT_SERVICE"; then
-                CURRENT_ACTION_STATUS="commands-succeeded"
+            log WARN "service=${CURRENT_SERVICE} action=remediation-start actions=${actions_count}"
+            if run_configured_sequence ".services[$index].actions.commands" remediation "$CURRENT_SERVICE" &&
+                run_http_remediation_sequence ".services[$index].actions.http" "$CURRENT_SERVICE"; then
+                if (( command_actions_count > 0 && http_actions_count > 0 )); then
+                    CURRENT_ACTION_STATUS="actions-succeeded"
+                elif (( http_actions_count > 0 )); then
+                    CURRENT_ACTION_STATUS="http-succeeded"
+                else
+                    CURRENT_ACTION_STATUS="commands-succeeded"
+                fi
             else
-                CURRENT_ACTION_STATUS="command-failed"
+                CURRENT_ACTION_STATUS="action-failed"
             fi
 
             if (( half_open_attempt == 1 )); then
@@ -4891,7 +5372,7 @@ process_service() {
                 log WARN "service=${CURRENT_SERVICE} result=recovered-after-remediation"
                 return 0
             fi
-            if [[ "$CURRENT_ACTION_STATUS" == commands-succeeded ]]; then
+            if [[ "$CURRENT_ACTION_STATUS" == commands-succeeded || "$CURRENT_ACTION_STATUS" == http-succeeded || "$CURRENT_ACTION_STATUS" == actions-succeeded ]]; then
                 CURRENT_ACTION_STATUS="verification-failed"
             fi
             record_circuit_action_result "$index" "$CURRENT_SERVICE" false
@@ -5214,7 +5695,7 @@ notify_test_run() {
     fi
 
     printf 'CHANNEL | RESULT | DETAIL\n'
-    for channel in email telegram discord slack ntfy; do
+    for channel in email telegram discord slack ntfy pagerduty opsgenie; do
         [[ "$NOTIFY_TEST_CHANNEL" == all || "$NOTIFY_TEST_CHANNEL" == "$channel" ]] || continue
         if [[ "$channel" == email ]]; then
             enabled="$(yaml_read '.notifications.email.enabled // false')"
@@ -5380,7 +5861,6 @@ status_run() {
     if (( STATUS_JSON == 1 )); then printf '\n]\n'; fi
     return "$STATUS_UNHEALTHY"
 }
-
 main() {
     local option argument yq_version service_count index matched=0 name source_config
     local -a parsed_arguments=()
@@ -5427,7 +5907,7 @@ main() {
                 esac
             done
             if [[ "$COMMAND_MODE" == notify-test ]]; then
-                case "$NOTIFY_TEST_CHANNEL" in email|telegram|discord|slack|ntfy|all) ;; *) die "Invalid notify-test channel: ${NOTIFY_TEST_CHANNEL}" ;; esac
+                case "$NOTIFY_TEST_CHANNEL" in email|telegram|discord|slack|ntfy|pagerduty|opsgenie|all) ;; *) die "Invalid notify-test channel: ${NOTIFY_TEST_CHANNEL}" ;; esac
                 case "$NOTIFY_TEST_EVENT" in failure|recovery|escalation) ;; *) die "Invalid notify-test event: ${NOTIFY_TEST_EVENT}" ;; esac
             fi
             set --

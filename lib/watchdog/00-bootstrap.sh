@@ -185,7 +185,7 @@ usage() {
 Usage:
   ${SCRIPT_NAME} [-c /path/to/config.yaml] [-s service_name] [-n]
   ${SCRIPT_NAME} validate -c /path/to/config.yaml
-  ${SCRIPT_NAME} notify-test [-c FILE] [-s SERVICE] [--channel email|telegram|discord|slack|ntfy|all] [--event failure|recovery|escalation]
+  ${SCRIPT_NAME} notify-test [-c FILE] [-s SERVICE] [--channel email|telegram|discord|slack|ntfy|pagerduty|opsgenie|all] [--event failure|recovery|escalation]
   ${SCRIPT_NAME} status [-c FILE] [-s SERVICE] [--json] [--all]
   ${SCRIPT_NAME} --report daily|weekly|monthly [-c FILE]
   ${SCRIPT_NAME} --trend SERVICE [-c FILE]

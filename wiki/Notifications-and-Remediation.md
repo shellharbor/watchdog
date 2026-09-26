@@ -62,7 +62,7 @@ sudoedit /etc/service-watchdog/environment
 WATCHDOG_SMTP_PASSWORD=replace-with-the-real-password
 ```
 
-## Webhooks: Telegram, Discord, Slack, and ntfy
+## Webhooks: Telegram, Discord, Slack, ntfy, PagerDuty, and Opsgenie
 
 Webhook credentials are also environment references. Dynamic values are safely
 rendered into the provider payload; never replace an `*_env` field with a
@@ -108,6 +108,32 @@ Telegram messages use HTML parse mode. Discord and Slack templates must be
 valid JSON objects. ntfy sends the rendered template as its request body. A
 missing secret fails only that channel and records the **variable name**, never
 the secret value, in the operational log.
+
+### PagerDuty and Opsgenie
+
+PagerDuty and Opsgenie are on-call providers, not generic JSON webhooks. A
+failure creates or updates an alert, escalation raises its urgency, and recovery
+resolves that exact alert. Watchdog uses its persisted incident ID as PagerDuty's
+deduplication key and Opsgenie's alias, preventing duplicate incidents during a
+continuing outage.
+
+```yaml
+notifications:
+  webhooks:
+    pagerduty:
+      enabled: true
+      routing_key_env: WATCHDOG_PAGERDUTY_ROUTING_KEY
+    opsgenie:
+      enabled: true
+      api_key_env: WATCHDOG_OPSGENIE_API_KEY
+      region: eu
+```
+
+Use `region: us` (the default) for `api.opsgenie.com`; select `eu` for
+`api.eu.opsgenie.com`. Provider API keys and request payloads are put in
+mode-`0600` temporary files and never curl command-line arguments or logs.
+Test them explicitly with `notify-test --channel pagerduty` or
+`notify-test --channel opsgenie`.
 
 ## Template variables
 
@@ -171,10 +197,39 @@ The action cooldown limits repeated remediations. For growing delays after
 failed actions, add `actions.backoff` as described in
 [Reliability and Dependencies](Reliability-and-Dependencies.md).
 
+## Remote HTTP remediation
+
+Use `actions.http` to call a restart or orchestration API without embedding a
+shell command. It runs after `actions.commands`, then Watchdog performs the
+same optional `verify_after` health check. Cooldown, backoff, circuit breaker,
+flapping protection, maintenance suppression, and `--dry-run` apply unchanged.
+
+```yaml
+services:
+  - name: api
+    check: {type: http, url: http://127.0.0.1:8080/health}
+    actions:
+      http:
+        - method: POST
+          url: https://portainer.example.com/api/restart
+          headers:
+            - name: Authorization
+              value_env: WATCHDOG_PORTAINER_TOKEN
+          body: '{"force":true}'
+          success_status: [202, 204]
+          timeout: 30
+```
+
+Only `POST`, `PUT`, `PATCH`, and `DELETE` are accepted. `success_status`
+defaults to any 2xx response. Store credentials in `headers[].value_env` or
+`body_env`; literal `body` is for non-secret data. Payloads and secret headers
+are written to private temporary files and removed after each request.
+
 ## Restrict remediation with an allowlist
 
 Legacy mode preserves existing configurations. In `enforce` mode, list every
-exact executable and argument vector used by normal and escalation actions.
+exact executable/argument vector and exact remote HTTP method/URL pair used by
+remediation.
 
 ```yaml
 security:
@@ -183,14 +238,17 @@ security:
     allowed_commands:
       - command: [/usr/bin/systemctl, restart, api]
       - command: [/usr/bin/systemctl, restart, worker]
+    allowed_http:
+      - method: POST
+        url: https://portainer.example.com/api/restart
 ```
 
 Validation and execution reject relative/symlink executable paths, shebang
 scripts, wrapper shells, and argument vectors absent from the allowlist. This
 is a guardrail, not a sandbox: trusted binaries and privileged service
 accounts still need careful filesystem permissions. The policy covers
-`actions.commands` and `escalation.actions.commands`, not health checks,
-conditions, or hooks.
+`actions.commands`, `escalation.actions.commands`, and `actions.http`, not
+health checks, conditions, or hooks.
 
 ## Hooks
 
