@@ -20,6 +20,11 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Added a regression test that proves template validation remains correct while
   bounding configuration-parser invocations.
 
+### Fixed
+
+- Restored cache matching for dotted configuration paths and numeric array
+  indexes, preventing ordinary reads from unnecessarily falling back to `yq`.
+
 ## [1.4.0] - 2026-09-26
 
 ### Added

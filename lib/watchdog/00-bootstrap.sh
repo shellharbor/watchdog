@@ -238,12 +238,13 @@ require_command() {
 
 yaml_cache_path() {
     local expression="$1" path
+    local simple_path_pattern='^[.][A-Za-z0-9_.-]*([[][0-9]+[]][A-Za-z0-9_.-]*)*$'
 
-    [[ "$expression" =~ ^\.[A-Za-z0-9_.\[\]-]+$ ]] || return 1
+    [[ "$expression" =~ $simple_path_pattern ]] || return 1
     path="${expression#.}"
     path="${path//./\/}"
-    path="${path//[/\/}"
-    path="${path//]/}"
+    path="${path//[[]/\/}"
+    path="${path//[]]/}"
     printf '%s' "$path"
 }
 
@@ -465,4 +466,3 @@ service_check_type() {
         yaml_read ".services[$index].check.type"
     fi
 }
-

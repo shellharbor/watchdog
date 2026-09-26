@@ -67,6 +67,9 @@ and is inherited by parallel check workers, so normal runs avoid repeatedly
 starting `yq` for the same scalar settings. No cache file is written, and each
 one-shot execution reads the current configuration afresh.
 
+Simple dotted paths and numeric array indexes are served from this snapshot;
+complex expressions retain the safe `yq` fallback.
+
 Complex YAML expressions, including unusual quoted map keys, keep using `yq`
 directly. This fallback preserves configuration semantics rather than trading
 correctness for an optimization.
