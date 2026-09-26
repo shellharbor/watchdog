@@ -82,14 +82,14 @@ yq --version  # Must report Mike Farah yq version v4.x.x
 
 ## Quick start
 
-Download the stable `v1.7.0` source archive from GitHub:
+Download the stable `v1.7.2` source archive from GitHub:
 
 ```bash
 curl -fL \
-  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.7.0.zip \
+  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.7.2.zip \
   -o watchdog.zip
 unzip watchdog.zip
-cd watchdog-1.7.0
+cd watchdog-1.7.2
 ```
 
 Alternatively, clone the repository with Git:
