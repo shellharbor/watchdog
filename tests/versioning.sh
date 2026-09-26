@@ -28,6 +28,7 @@ actual_version="$(bash "$WATCHDOG_SCRIPT" --version)"
 grep -F "/refs/tags/v${expected_version}.zip" "${PROJECT_DIR}/README.md" >/dev/null
 grep -F "watchdog-${expected_version}" "${PROJECT_DIR}/README.md" >/dev/null
 grep -F "## [${expected_version}]" "${PROJECT_DIR}/CHANGELOG.md" >/dev/null
-grep -F '"${SOURCE_DIR}/VERSION" "${INSTALL_DIR}/VERSION"' "${PROJECT_DIR}/install.sh" >/dev/null
+expected_install_line="\"\${SOURCE_DIR}/VERSION\" \"\${INSTALL_DIR}/VERSION\""
+grep -F "$expected_install_line" "${PROJECT_DIR}/install.sh" >/dev/null
 
 printf 'Version metadata test passed for v%s.\n' "$expected_version"

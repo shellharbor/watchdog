@@ -148,7 +148,10 @@ grep -F '"duration_seconds":30' "${TEST_DIRECTORY}/health-state/market-data.inci
 grep -F '"remediation_result":"liveness-restored-readiness-pending"' "${TEST_DIRECTORY}/health-state/market-data.incident-history.jsonl" >/dev/null
 grep -F '# TYPE watchdog_service_blocked_dependency_total counter' "${TEST_DIRECTORY}/metrics/watchdog.prom" >/dev/null
 grep -F '# TYPE watchdog_service_incidents_total counter' "${TEST_DIRECTORY}/metrics/watchdog.prom" >/dev/null
-! grep -E 'incident-[0-9]|market-action|secret' "${TEST_DIRECTORY}/metrics/watchdog.prom" >/dev/null
+if grep -E 'incident-[0-9]|market-action|secret' "${TEST_DIRECTORY}/metrics/watchdog.prom" >/dev/null; then
+    printf 'Metrics exposed sensitive incident or remediation data.\n' >&2
+    exit 1
+fi
 
 # validate must be read-only, and enforce must reject relative executables.
 safe_true="$(realpath -e /usr/bin/true)"
