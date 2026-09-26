@@ -1,6 +1,6 @@
 # Watchdog. Sites Monitoring Bash-script
 
-![Watchdog Hero Banner](https://i.postimg.cc/4ykZzvhr/watchdog-hero-site-monitoring.jpg)
+![Watchdog Hero Banner](https://i.postimg.cc/XYzDRyfV/watchdog-monitoring-shell-bash-hero.jpg)
 
 [![CI](https://github.com/shellharbor/watchdog/actions/workflows/ci.yml/badge.svg)](https://github.com/shellharbor/watchdog/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/shellharbor/watchdog/actions/workflows/codeql.yml/badge.svg)](https://github.com/shellharbor/watchdog/actions/workflows/codeql.yml)
@@ -51,6 +51,7 @@ For task-oriented guides and additional runnable examples, see the
 - Telegram, Discord, Slack, and ntfy webhook alerts
 - Persistent state and transition-only hooks
 - Global non-blocking lock to prevent overlapping runs
+- In-memory YAML lookup cache to avoid repeated parser processes during each run
 - Dry-run and single-service modes
 - Strict YAML validation and bounded command execution
 
@@ -123,6 +124,20 @@ and the matching changelog entry agree.
 
 To test the development branch instead, clone the repository as shown above or
 download [`main.zip`](https://github.com/shellharbor/watchdog/archive/refs/heads/main.zip).
+
+### Development source and distribution
+
+The installed monitor remains the portable single-file
+`service-watchdog.sh`. For development, edit the smallest relevant source file
+in `lib/watchdog/`, then regenerate the distribution before committing:
+
+```bash
+bash ./scripts/build-watchdog.sh
+bash ./scripts/build-watchdog.sh --check
+```
+
+The generated script does not load modules at runtime, so installer, cron, and
+systemd deployments continue to need only `service-watchdog.sh` and `VERSION`.
 
 ## Configuration
 
@@ -1525,8 +1540,9 @@ enforce after reviewing actions.
 ## Testing
 
 ```bash
-bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
-shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
+bash ./scripts/build-watchdog.sh --check
+bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh
+shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh tests/*.sh
 bash ./tests/versioning.sh
 bash ./tests/run-all.sh
 ```
@@ -1542,6 +1558,10 @@ assertions, latency degradation, no-remediation behavior, and metric output.
 `tests/tls-certificate.sh` covers SNI and port handling, expiry thresholds,
 missing optional dependencies, dry runs, invalid configuration, and the absence
 of certificate data in operational logs.
+`tests/yaml-cache.sh` validates template expansion while bounding the number of
+`yq` parser invocations used for configuration reads.
+`tests/build.sh` checks that the generated distribution is current and exactly
+matches a fresh build from the source modules.
 
 ## License
 

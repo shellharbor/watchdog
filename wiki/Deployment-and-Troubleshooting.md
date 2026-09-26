@@ -59,6 +59,31 @@ The global non-blocking lock means an overlapping scheduled execution is
 skipped rather than queued. Configure check/action timeouts and parallelism so
 the expected run duration is comfortably below the schedule interval.
 
+## Configuration read performance
+
+At startup, Watchdog snapshots simple configuration values, node types, lengths,
+and map entry order in memory. The snapshot is rebuilt after template expansion
+and is inherited by parallel check workers, so normal runs avoid repeatedly
+starting `yq` for the same scalar settings. No cache file is written, and each
+one-shot execution reads the current configuration afresh.
+
+Complex YAML expressions, including unusual quoted map keys, keep using `yq`
+directly. This fallback preserves configuration semantics rather than trading
+correctness for an optimization.
+
+## Developing the monitor source
+
+Production deployments still use the self-contained `service-watchdog.sh` file.
+Contributors edit the ordered files in `lib/watchdog/`, regenerate the
+distribution, and verify that it is current before submitting a change:
+
+```bash
+bash ./scripts/build-watchdog.sh
+bash ./scripts/build-watchdog.sh --check
+```
+
+The installer and systemd unit do not need the module directory at runtime.
+
 ## Safe release checklist
 
 Before enabling a changed configuration in production:
@@ -101,8 +126,9 @@ The project uses syntax checks, ShellCheck, schema validation, and focused Bash
 regression tests. Run the narrowest relevant test first, then broader coverage:
 
 ```bash
-bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
-shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
+bash ./scripts/build-watchdog.sh --check
+bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh
+shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh tests/*.sh
 bash ./tests/versioning.sh
 bash ./tests/run-all.sh
 ```

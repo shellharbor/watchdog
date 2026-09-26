@@ -7,6 +7,7 @@ readonly TESTS_DIR
 # Keep this explicit order as the authoritative test inventory. The coverage
 # check below fails if a test is added to tests/ without being registered here.
 readonly TEST_SCRIPTS=(
+    build.sh
     circuit-breaker.sh
     conditional.sh
     dependencies.sh
@@ -32,6 +33,7 @@ readonly TEST_SCRIPTS=(
     tls-certificate.sh
     versioning.sh
     webhooks.sh
+    yaml-cache.sh
 )
 
 declare -A registered_tests=()

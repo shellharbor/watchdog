@@ -17,6 +17,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          bash ./scripts/build-watchdog.sh --check
           version="$(tr -d '\r\n' < VERSION)"
           [[ "${GITHUB_REF_NAME}" == "v${version}" ]]
           [[ "$(bash ./service-watchdog.sh --version)" == "service-watchdog.sh ${version}" ]]

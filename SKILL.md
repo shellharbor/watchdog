@@ -11,8 +11,12 @@ projects.
 
 ## Operating contract
 
-- The main entrypoint is `service-watchdog.sh`; it is a Linux Bash 4.3+
-  one-shot monitor. `watchdog-discover.sh` is a separate offline generator.
+- The main entrypoint is the generated `service-watchdog.sh`; it is a Linux
+  Bash 4.3+ one-shot monitor. Edit its ordered source modules in
+  `lib/watchdog/`, regenerate it with `scripts/build-watchdog.sh`, and verify
+  it with `scripts/build-watchdog.sh --check`. The released/installed script
+  remains self-contained and never sources modules at runtime.
+  `watchdog-discover.sh` is a separate offline generator.
 - Preserve exit codes: `0` healthy/no remediation, `1` unavailable or a
   remediation attempt, and `2` configuration or runtime error.
 - Keep new behavior opt-in. Do not change existing state-file names or format,
@@ -77,14 +81,16 @@ Start with the narrowest changed test in `tests/`, then run the relevant
 configuration/schema test and broader regression coverage:
 
 ```bash
-bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
-shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
+bash ./scripts/build-watchdog.sh --check
+bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh
+shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh tests/*.sh
 bash ./tests/versioning.sh
 bash ./tests/run-all.sh
 ```
 
 `tests/run-all.sh` is the authoritative inventory and rejects unregistered test
-scripts. `tests/schema.sh` requires Mike Farah `yq` v4 and Python's
+scripts. `tests/build.sh` keeps the generated distribution synchronized with
+the modules. `tests/schema.sh` requires Mike Farah `yq` v4 and Python's
 `jsonschema` package. CI installs ShellCheck, SQLite, yq, and jsonschema, then
 also compiles every Bash source with the official `bash:4.3.48` container to
 protect the documented compatibility floor; do not claim a check ran locally if

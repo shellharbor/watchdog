@@ -33,8 +33,11 @@ jobs:
       - name: Install CI-only schema validator
         run: python -m pip install 'jsonschema>=4.19,<5'
 
+      - name: Check generated single-file distribution
+        run: bash ./scripts/build-watchdog.sh --check
+
       - name: Check Bash syntax
-        run: bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
+        run: bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh
 
       - name: Check Bash 4.3 syntax compatibility
         run: |
@@ -42,10 +45,12 @@ jobs:
             --volume "${GITHUB_WORKSPACE}:/workspace:ro" \
             --workdir /workspace \
             bash:4.3.48 \
-            bash -c '[[ "$BASH_VERSION" == 4.3.* ]] && bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh'
+            bash -c '[[ "$BASH_VERSION" == 4.3.* ]] && bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh'
 
       - name: Run ShellCheck
-        run: shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
+        # The generated script is the complete program. Linting individual
+        # library fragments would incorrectly flag globals used by another fragment.
+        run: shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh tests/*.sh
 
       - name: Run full regression suite
         run: bash ./tests/run-all.sh

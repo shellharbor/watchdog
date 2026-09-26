@@ -12,8 +12,9 @@
 ## Verification
 
 - [ ] Focused test(s):
-- [ ] `bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh`
-- [ ] `shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh`
+- [ ] `bash ./scripts/build-watchdog.sh --check`
+- [ ] `bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh`
+- [ ] `shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh tests/*.sh`
 - [ ] `bash ./tests/versioning.sh`
 - [ ] `bash ./tests/run-all.sh`
 

@@ -89,7 +89,8 @@ release/
 .ai/
 .codex/
 .cursor/
-scripts/
+scripts/*
+!scripts/build-watchdog.sh
 .windsurfrules
 AGENTS.md
 AI_CONTEXT.md

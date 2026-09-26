@@ -30,6 +30,10 @@ The runtime targets Linux with Bash 4.3+, Mike Farah `yq` v4, `curl`, `flock`,
 and GNU coreutils. CI additionally provides ShellCheck, SQLite, and Python's
 `jsonschema` package.
 
+Watchdog's source is organized in `lib/watchdog/`; the portable
+`service-watchdog.sh` file is generated. Edit the relevant module, then run
+`bash ./scripts/build-watchdog.sh` before committing.
+
 ## Contribution workflow
 
 1. Start from a current branch and keep one logical concern per pull request.
@@ -49,8 +53,9 @@ and GNU coreutils. CI additionally provides ShellCheck, SQLite, and Python's
 Run the narrowest relevant test first, then the complete suite:
 
 ```bash
-bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
-shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
+bash ./scripts/build-watchdog.sh --check
+bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh
+shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh tests/*.sh
 bash ./tests/versioning.sh
 bash ./tests/run-all.sh
 ```

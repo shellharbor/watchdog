@@ -7,6 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Changed
+
+- Watchdog's maintainable source is now split into ordered `lib/watchdog/`
+  modules while the installer and deployments continue to use the generated,
+  self-contained `service-watchdog.sh` distribution. The build and release
+  checks reject a stale generated script.
+- Watchdog now snapshots the parsed configuration in memory and serves simple
+  scalar, type, length, and map-entry lookups from that cache. The cache is
+  rebuilt after template expansion, inherited by parallel check workers, and
+  safely falls back to `yq` for complex expressions.
+- Added a regression test that proves template validation remains correct while
+  bounding configuration-parser invocations.
+
 ## [1.4.0] - 2026-09-26
 
 ### Added
