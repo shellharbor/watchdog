@@ -595,6 +595,11 @@ validate_email_configuration() {
 
     password_env="$(yaml_read '.notifications.email.smtp.password_env // ""')"
     password="$(yaml_read '.notifications.email.smtp.password // ""')"
+    value="$(yaml_read '.notifications.email.smtp.username // ""')"
+    [[ "$value" != *$'\r'* && "$value" != *$'\n'* ]] ||
+        die 'notifications.email.smtp.username must not contain a carriage return or newline.'
+    [[ "$password" != *$'\r'* && "$password" != *$'\n'* ]] ||
+        die 'notifications.email.smtp.password must not contain a carriage return or newline.'
     [[ -z "$password_env" || -z "$password" ]] ||
         die "Use only one of notifications.email.smtp.password_env or password."
     if [[ -n "$password_env" ]]; then
@@ -1579,6 +1584,8 @@ configure_email() {
         die "SMTP username is configured, but no password is available."
     [[ -n "$EMAIL_USERNAME" || -z "$EMAIL_PASSWORD" ]] ||
         die "SMTP password is configured, but smtp.username is empty."
+    [[ "$EMAIL_PASSWORD" != *$'\r'* && "$EMAIL_PASSWORD" != *$'\n'* ]] ||
+        die 'notifications.email.smtp.password must not contain a carriage return or newline.'
 }
 
 configure_metrics() {
@@ -2140,9 +2147,16 @@ log_notification_plan() {
     done
 }
 
+escape_curl_config_value() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '%s' "$value"
+}
+
 send_email_message() {
     local event="$1" subject="$2" body="$3"
-    local encoded_subject message_file recipient recipients_header="" output command_status recipient_index
+    local encoded_subject message_file smtp_auth_file="" recipient recipients_header="" output command_status recipient_index
     local -a curl_command
 
     (( EMAIL_ENABLED == 1 )) || return 0
@@ -2161,7 +2175,19 @@ send_email_message() {
     )
     (( EMAIL_TLS_REQUIRED == 1 )) && curl_command+=(--ssl-reqd)
     (( EMAIL_INSECURE_SKIP_VERIFY == 1 )) && curl_command+=(--insecure)
-    [[ -z "$EMAIL_USERNAME" ]] || curl_command+=(--user "${EMAIL_USERNAME}:${EMAIL_PASSWORD}")
+    if [[ -n "$EMAIL_USERNAME" ]]; then
+        smtp_auth_file="$(mktemp "${TEMP_DIRECTORY}/smtp-auth.XXXXXX")" || {
+            log ERROR "service=${CURRENT_SERVICE} result=email-failed event=${event} reason=auth-file-create"
+            return 1
+        }
+        if ! chmod 0600 "$smtp_auth_file" ||
+            ! printf 'user = "%s"\n' "$(escape_curl_config_value "${EMAIL_USERNAME}:${EMAIL_PASSWORD}")" >"$smtp_auth_file"; then
+            rm -f -- "$smtp_auth_file"
+            log ERROR "service=${CURRENT_SERVICE} result=email-failed event=${event} reason=auth-file-write"
+            return 1
+        fi
+        curl_command+=(--config "$smtp_auth_file")
+    fi
     for ((recipient_index = 0; recipient_index < EMAIL_RECIPIENTS_COUNT; recipient_index++)); do
         recipient="$(yaml_read ".notifications.email.recipients[$recipient_index]")"
         curl_command+=(--mail-rcpt "$recipient")
@@ -2182,7 +2208,9 @@ send_email_message() {
     output="$("${curl_command[@]}" --upload-file "$message_file" 2>&1)"
     command_status=$?
     rm -f -- "$message_file"
+    [[ -z "$smtp_auth_file" ]] || rm -f -- "$smtp_auth_file"
     output="$(sanitize_detail "$output")"
+    [[ -z "$EMAIL_PASSWORD" ]] || output="${output//"$EMAIL_PASSWORD"/[REDACTED]}"
     if (( command_status == 0 )); then
         if (( NOTIFY_TEST_MODE == 1 )); then
             NOTIFY_TEST_DETAIL='sent'
@@ -2193,7 +2221,6 @@ send_email_message() {
         return 0
     fi
     if (( NOTIFY_TEST_MODE == 1 )); then
-        [[ -z "$EMAIL_PASSWORD" ]] || output="${output//"$EMAIL_PASSWORD"/[REDACTED]}"
         output="${output//"$EMAIL_SMTP_URL"/[SMTP_URL]}"
         NOTIFY_TEST_DETAIL="curl exit ${command_status}: ${output:-request failed}"
         log ERROR "service=${CURRENT_SERVICE} result=test-email-failed event=${event} curl_exit=${command_status}"

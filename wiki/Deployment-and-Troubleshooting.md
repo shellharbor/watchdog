@@ -112,7 +112,8 @@ not registered before running every scenario. `tests/schema.sh` needs Mike
 Farah `yq` v4 and Python's `jsonschema` package. The suite isolates external
 programs through PATH shims and temporary directories; follow that pattern when
 adding a new check, notification channel, or command. GitHub Actions runs this
-same suite on pushes and pull requests.
+same suite on pushes and pull requests, and compiles every Bash source with the
+official `bash:4.3.48` container to protect the documented compatibility floor.
 
 ## Get help with useful evidence
 

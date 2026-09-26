@@ -78,14 +78,14 @@ yq --version  # Must report Mike Farah yq version v4.x.x
 
 ## Quick start
 
-Download the stable `v1.2.0` source archive from GitHub:
+Download the stable `v1.3.0` source archive from GitHub:
 
 ```bash
 curl -fL \
-  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.2.0.zip \
+  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.3.0.zip \
   -o watchdog.zip
 unzip watchdog.zip
-cd watchdog-1.2.0
+cd watchdog-1.3.0
 ```
 
 Alternatively, clone the repository with Git:
@@ -494,6 +494,9 @@ SMTP fields:
   variable itself, not its value, is written to YAML.
 - `password` is an optional inline alternative to `password_env`. Do not set
   both fields; `password_env` is recommended.
+- For authenticated SMTP, Watchdog writes credentials only to an ephemeral
+  mode-`0600` curl configuration file. The file is removed immediately after
+  delivery, so the password is not exposed in a `curl` process command line.
 - `tls_required: true` requires a secure SMTP connection. Keep this enabled for
   Internet-facing SMTP servers.
 - `insecure_skip_verify: false` verifies the SMTP server certificate. Set it to
@@ -1500,7 +1503,9 @@ bash ./tests/run-all.sh
 new test script is not registered, then runs every listed scenario in a
 deterministic order. GitHub Actions runs this same suite on pushes and pull
 requests. The schema test requires Mike Farah `yq` v4 and Python's `jsonschema`
-package; CI installs both. `tests/smart-http.sh` covers secret headers, content
+package; CI installs both and also compiles every Bash source with the official
+`bash:4.3.48` container to protect the documented compatibility floor.
+`tests/smart-http.sh` covers secret headers, content
 assertions, latency degradation, no-remediation behavior, and metric output.
 
 ## License

@@ -24,8 +24,14 @@ cat >"${TEST_DIRECTORY}/bin/curl" <<'FAKE_CURL'
 set -euo pipefail
 
 upload_file=""
+auth_config=""
+printf '%s\n' "$@" >"$WATCHDOG_TEST_CURL_ARGUMENTS"
 while (( $# > 0 )); do
     case "$1" in
+        --config)
+            auth_config="$2"
+            shift 2
+            ;;
         --upload-file)
             upload_file="$2"
             shift 2
@@ -37,6 +43,14 @@ while (( $# > 0 )); do
 done
 
 [[ -n "$upload_file" && -r "$upload_file" ]]
+[[ -n "$auth_config" && -r "$auth_config" ]]
+printf '%s\n' "$auth_config" >"$WATCHDOG_TEST_SMTP_AUTH_FILE"
+stat -c '%a' "$auth_config" >"$WATCHDOG_TEST_SMTP_AUTH_MODE"
+grep -Fqx "user = \"watchdog@example.test:${WATCHDOG_TEST_SMTP_PASSWORD}\"" "$auth_config"
+if [[ "${WATCHDOG_TEST_CURL_FAIL:-0}" == 1 ]]; then
+    printf 'curl: SMTP authentication failed for %s\n' "$WATCHDOG_TEST_SMTP_PASSWORD" >&2
+    exit 7
+fi
 printf '%s\n' '--- MESSAGE ---' >>"$WATCHDOG_TEST_MAILBOX"
 cat -- "$upload_file" >>"$WATCHDOG_TEST_MAILBOX"
 FAKE_CURL
@@ -56,6 +70,10 @@ export PATH="${TEST_DIRECTORY}/bin:${PATH}"
 export WATCHDOG_TEST_MAILBOX="${TEST_DIRECTORY}/mailbox.eml"
 export WATCHDOG_TEST_ALLOW_RECOVERY="${TEST_DIRECTORY}/allow-recovery"
 export WATCHDOG_TEST_HEALTHY_FILE="${TEST_DIRECTORY}/healthy"
+export WATCHDOG_TEST_CURL_ARGUMENTS="${TEST_DIRECTORY}/curl-arguments"
+export WATCHDOG_TEST_SMTP_AUTH_FILE="${TEST_DIRECTORY}/smtp-auth-file"
+export WATCHDOG_TEST_SMTP_AUTH_MODE="${TEST_DIRECTORY}/smtp-auth-mode"
+export WATCHDOG_TEST_SMTP_PASSWORD='smtp-password-not-for-logs'
 
 cat >"${TEST_DIRECTORY}/config.yaml" <<EOF
 settings:
@@ -74,6 +92,8 @@ notifications:
     smtp:
       url: smtps://smtp.example.test:465
       from: watchdog@example.test
+      username: watchdog@example.test
+      password_env: WATCHDOG_TEST_SMTP_PASSWORD
       tls_required: true
       insecure_skip_verify: false
       timeout: 5
@@ -110,6 +130,13 @@ set -e
 [[ "$(<"${TEST_DIRECTORY}/state/email-transition.state")" == unavailable ]]
 [[ "$(grep -c '^Subject:' "$WATCHDOG_TEST_MAILBOX")" == 1 ]]
 grep -F 'action=email event=failure' "${TEST_DIRECTORY}/watchdog.log" >/dev/null
+[[ "$(<"$WATCHDOG_TEST_SMTP_AUTH_MODE")" == 600 ]]
+smtp_auth_file="$(<"$WATCHDOG_TEST_SMTP_AUTH_FILE")"
+[[ ! -e "$smtp_auth_file" ]]
+if grep -Fq "$WATCHDOG_TEST_SMTP_PASSWORD" "$WATCHDOG_TEST_CURL_ARGUMENTS" "${TEST_DIRECTORY}/watchdog.log"; then
+    printf 'SMTP password leaked to curl arguments or operational log.\n' >&2
+    exit 1
+fi
 
 set +e
 bash "$WATCHDOG_SCRIPT" -c "${TEST_DIRECTORY}/config.yaml" -s email-transition
@@ -133,5 +160,56 @@ grep -F 'action=email event=recovery' "${TEST_DIRECTORY}/watchdog.log" >/dev/nul
 
 bash "$WATCHDOG_SCRIPT" -c "${TEST_DIRECTORY}/config.yaml" -s email-transition
 [[ "$(grep -c '^Subject:' "$WATCHDOG_TEST_MAILBOX")" == 2 ]]
+
+rm -f -- "$WATCHDOG_TEST_ALLOW_RECOVERY" "$WATCHDOG_TEST_HEALTHY_FILE"
+set +e
+WATCHDOG_TEST_CURL_FAIL=1 bash "$WATCHDOG_SCRIPT" -c "${TEST_DIRECTORY}/config.yaml" -s email-transition
+failed_delivery_status=$?
+set -e
+[[ "$failed_delivery_status" == 1 ]]
+grep -F 'result=email-failed' "${TEST_DIRECTORY}/watchdog.log" >/dev/null
+if grep -Fq "$WATCHDOG_TEST_SMTP_PASSWORD" "${TEST_DIRECTORY}/watchdog.log"; then
+    printf 'SMTP password leaked through curl error output.\n' >&2
+    exit 1
+fi
+
+cp "${TEST_DIRECTORY}/config.yaml" "${TEST_DIRECTORY}/invalid-smtp-username.yaml"
+yq eval -i '.notifications.email.smtp.username = "watchdog@example.test\ninjected"' \
+    "${TEST_DIRECTORY}/invalid-smtp-username.yaml"
+set +e
+bash "$WATCHDOG_SCRIPT" validate -c "${TEST_DIRECTORY}/invalid-smtp-username.yaml" \
+    >"${TEST_DIRECTORY}/invalid-smtp-username.out" 2>&1
+invalid_username_status=$?
+set -e
+[[ "$invalid_username_status" == 2 ]]
+grep -F 'notifications.email.smtp.username' "${TEST_DIRECTORY}/invalid-smtp-username.out" >/dev/null
+
+set +e
+cp "${TEST_DIRECTORY}/config.yaml" "${TEST_DIRECTORY}/invalid-smtp-password.yaml"
+yq eval -i 'del(.notifications.email.smtp.password_env) | .notifications.email.smtp.password = "smtp-password\ninjected"' \
+    "${TEST_DIRECTORY}/invalid-smtp-password.yaml"
+bash "$WATCHDOG_SCRIPT" validate -c "${TEST_DIRECTORY}/invalid-smtp-password.yaml" \
+    >"${TEST_DIRECTORY}/invalid-smtp-password.out" 2>&1
+invalid_password_status=$?
+set -e
+[[ "$invalid_password_status" == 2 ]]
+grep -F 'notifications.email.smtp.password' "${TEST_DIRECTORY}/invalid-smtp-password.out" >/dev/null
+if grep -Fq 'smtp-password' "${TEST_DIRECTORY}/invalid-smtp-password.out"; then
+    printf 'Invalid SMTP password leaked to validation output.\n' >&2
+    exit 1
+fi
+
+set +e
+WATCHDOG_TEST_SMTP_PASSWORD=$'smtp-password\ninjected' \
+    bash "$WATCHDOG_SCRIPT" -c "${TEST_DIRECTORY}/config.yaml" -s email-transition \
+    >"${TEST_DIRECTORY}/invalid-smtp-password-env.out" 2>&1
+invalid_password_env_status=$?
+set -e
+[[ "$invalid_password_env_status" == 2 ]]
+grep -F 'notifications.email.smtp.password' "${TEST_DIRECTORY}/watchdog.log" >/dev/null
+if grep -Fq 'smtp-password' "${TEST_DIRECTORY}/invalid-smtp-password-env.out" "${TEST_DIRECTORY}/watchdog.log"; then
+    printf 'Invalid SMTP environment password leaked to output or log.\n' >&2
+    exit 1
+fi
 
 printf 'Email notification test passed.\n'

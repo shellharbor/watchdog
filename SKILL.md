@@ -81,9 +81,11 @@ bash ./tests/run-all.sh
 
 `tests/run-all.sh` is the authoritative inventory and rejects unregistered test
 scripts. `tests/schema.sh` requires Mike Farah `yq` v4 and Python's
-`jsonschema` package. CI installs ShellCheck, SQLite, yq, and jsonschema; do
-not claim a check ran locally if its tool is unavailable. Tests isolate external
-programs with PATH shims and temporary directories—preserve that pattern.
+`jsonschema` package. CI installs ShellCheck, SQLite, yq, and jsonschema, then
+also compiles every Bash source with the official `bash:4.3.48` container to
+protect the documented compatibility floor; do not claim a check ran locally if
+its tool is unavailable. Tests isolate external programs with PATH shims and
+temporary directories—preserve that pattern.
 
 ## Keep this skill current
 

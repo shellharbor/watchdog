@@ -14,6 +14,9 @@ content is controlled by template variables such as `{{service}}` and
 
 Use `password_env` for an SMTP password. `password` remains an inline
 alternative, but never set both fields and do not commit secrets to YAML.
+When SMTP authentication is enabled, Watchdog supplies credentials from an
+ephemeral mode-`0600` curl configuration file and removes it immediately after
+delivery; the password is never placed in curl's process command line.
 
 ```yaml
 notifications:

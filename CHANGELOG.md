@@ -7,11 +7,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-26
+
 ### Added
 
 - An OpenSSF Scorecard GitHub Actions workflow that publishes signed supply-chain
   security results to GitHub Code Scanning and the public Scorecard service,
   plus a live README badge.
+- A CI compatibility gate that compiles every Bash source with Bash 4.3, the
+  project's documented minimum supported Bash version.
+
+### Security
+
+- SMTP credentials are now supplied to curl through an ephemeral mode-`0600`
+  configuration file instead of process arguments. The file is removed after
+  delivery, and SMTP error output redacts the password before it reaches logs.
 
 ## [1.2.0] - 2026-09-26
 
@@ -140,7 +150,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Quick Start now uses the stable `v1.0.3` source archive.
 - Expanded repository ignore rules and troubleshooting documentation.
 
-[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/shellharbor/watchdog/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/shellharbor/watchdog/compare/v1.1.8...v1.2.0
 [1.1.8]: https://github.com/shellharbor/watchdog/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/shellharbor/watchdog/compare/v1.1.6...v1.1.7

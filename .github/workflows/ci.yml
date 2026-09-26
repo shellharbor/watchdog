@@ -36,6 +36,14 @@ jobs:
       - name: Check Bash syntax
         run: bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
 
+      - name: Check Bash 4.3 syntax compatibility
+        run: |
+          docker run --rm \
+            --volume "${GITHUB_WORKSPACE}:/workspace:ro" \
+            --workdir /workspace \
+            bash:4.3.48 \
+            bash -c '[[ "$BASH_VERSION" == 4.3.* ]] && bash -n service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh'
+
       - name: Run ShellCheck
         run: shellcheck service-watchdog.sh watchdog-discover.sh install.sh tests/*.sh
 
