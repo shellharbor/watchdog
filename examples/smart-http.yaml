@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+settings:
+  log_file: /var/log/service-watchdog/service-watchdog.log
+  lock_file: /run/lock/service-watchdog.lock
+  state_directory: /var/lib/service-watchdog
+  default_attempts: 1
+  default_retry_delay: 0
+
+services:
+  - name: authenticated-api
+    check:
+      type: http
+      url: https://api.example.com/health
+      method: GET
+      headers:
+        - name: Accept
+          value: application/json
+        - name: Authorization
+          value_env: WATCHDOG_API_TOKEN
+      expect:
+        content_type: application/json
+        body_regex: '"status"[[:space:]]*:[[:space:]]*"ok"'
+        max_total_ms: 800
+    actions:
+      commands: []
+
+# Export WATCHDOG_API_TOKEN before a normal run. The header value is sent
+# directly to curl, never logged, and never stored in the state directory.

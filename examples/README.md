@@ -7,6 +7,7 @@ service names, and commands before enabling scheduled runs.
 | Example | Use case |
 | --- | --- |
 | [`http-docker-compose.yaml`](http-docker-compose.yaml) | Check an HTTP health endpoint and restart Docker Compose services |
+| [`smart-http.yaml`](smart-http.yaml) | Assert JSON content safely with secret headers and a latency SLO |
 | [`tcp-systemd.yaml`](tcp-systemd.yaml) | Check a TCP port and restart a systemd unit |
 | [`command-check.yaml`](command-check.yaml) | Use a local command as the health check |
 | [`disk-space.yaml`](disk-space.yaml) | Alert through email and webhooks when a filesystem runs low on free space |

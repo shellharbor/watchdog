@@ -23,6 +23,9 @@ projects.
   reach logs, state, metrics, examples, history, or status pages.
 - Transition semantics are central: failure/recovery notifications, hooks, and
   remediation must not be duplicated for a continuing failure.
+- An HTTP `expect.max_total_ms` breach is a `degraded` latency signal: preserve
+  its transition alert and metrics, but never route it into remediation,
+  circuit-breaker, backoff, flapping, or unavailable-counter handling.
 - `--dry-run` may perform checks but must not persist state/history/metrics or
   send notifications, run actions, or run hooks. `validate`, `status`,
   `--report`, and `--trend` must not run checks. `status`, reports, and trends

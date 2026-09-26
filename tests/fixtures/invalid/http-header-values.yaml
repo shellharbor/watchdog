@@ -1,0 +1,13 @@
+settings:
+  log_file: /tmp/watchdog-schema-test.log
+  lock_file: /tmp/watchdog-schema-test.lock
+  state_directory: /tmp/watchdog-schema-test-state
+services:
+  - name: broken-http-header
+    check:
+      type: http
+      url: https://example.com/health
+      headers:
+        - name: Authorization
+          value: literal-secret
+          value_env: WATCHDOG_API_TOKEN

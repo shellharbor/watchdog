@@ -35,6 +35,39 @@ services:
 Use a dedicated health endpoint where possible: public pages may return a
 successful status while their database or queue is unavailable.
 
+### Assertions, secret headers, and latency SLOs
+
+Add literal non-secret headers with `value`. For tokens and credentials, use
+`value_env`; its environment-variable value is passed directly to `curl` and is
+never written to logs, state, metrics, history, or the status page.
+
+```yaml
+services:
+  - name: orders-api
+    check:
+      type: http
+      url: https://orders.example.com/health
+      headers:
+        - name: Accept
+          value: application/json
+        - name: Authorization
+          value_env: WATCHDOG_ORDERS_API_TOKEN
+      expect:
+        content_type: application/json
+        body_regex: '"ready"[[:space:]]*:[[:space:]]*true'
+        max_total_ms: 500
+```
+
+`content_type` matches the media type and ignores parameters such as
+`charset=utf-8`. `body_regex` is an extended regular expression; Watchdog
+captures at most 64 KiB in a private temporary file, checks it, and deletes it
+without placing the body in diagnostics. A content-type or body mismatch is an
+ordinary failed check. A successful response slower than `max_total_ms` becomes
+`degraded`: it sends a transition alert and exports HTTP latency metrics, but
+never runs remediation or changes circuit-breaker, backoff, flapping, or
+unavailable-counter state. See
+[`examples/smart-http.yaml`](../examples/smart-http.yaml) for a complete file.
+
 ## TCP ports
 
 TCP checks use Bash's `/dev/tcp` facility, so no separate `nc` dependency is

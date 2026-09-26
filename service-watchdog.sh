@@ -44,6 +44,9 @@ DEFAULT_ACTION_COOLDOWN=300
 
 CHECK_DETAIL=""
 CHECK_HTTP_STATUS=""
+CHECK_HTTP_TOTAL_MS=""
+CHECK_HTTP_MAX_TOTAL_MS=""
+CHECK_RESULT_STATE=unavailable
 CHECK_EXIT_CODE=""
 MATCH_COUNT=""
 THRESHOLD_VALUE=""
@@ -130,6 +133,8 @@ declare -A SERVICE_LEVEL=()
 declare -A PRELOADED_CHECK_STATE=()
 declare -A PRELOADED_CHECK_DETAIL=()
 declare -A PRELOADED_CHECK_HTTP_STATUS=()
+declare -A PRELOADED_CHECK_HTTP_TOTAL_MS=()
+declare -A PRELOADED_CHECK_HTTP_MAX_TOTAL_MS=()
 declare -A PRELOADED_CHECK_EXIT_CODE=()
 declare -A PRELOADED_CHECK_ATTEMPTS=()
 declare -A CONDITION_SKIPPED=()
@@ -1244,6 +1249,7 @@ validate_threshold_source() {
 
 validate_check_definition() {
     local expression="$1" description="$2" check_type value value_type status_count status_index status_code port field threshold_count=0
+    local header_count header_index header_type header_name header_value_type header_env_type pattern_status
     validate_string "${expression}.type" "${description}.type"
     check_type="$(yaml_read "${expression}.type")"
     case "$check_type" in
@@ -1266,6 +1272,57 @@ validate_check_definition() {
                         die "${description}.success_status[$status_index] must be an HTTP status from 100 to 599."
                     fi
                 done
+            fi
+            value_type="$(yaml_read "${expression}.headers | type")"
+            if [[ "$value_type" != '!!null' ]]; then
+                [[ "$value_type" == '!!seq' ]] || die "${description}.headers must be an array."
+                header_count="$(yaml_read "${expression}.headers | length")"
+                for ((header_index = 0; header_index < header_count; header_index++)); do
+                    header_type="$(yaml_read "${expression}.headers[$header_index] | type")"
+                    [[ "$header_type" == '!!map' ]] || die "${description}.headers[$header_index] must be a map."
+                    validate_string "${expression}.headers[$header_index].name" "${description}.headers[$header_index].name"
+                    header_name="$(yaml_read "${expression}.headers[$header_index].name")"
+                    [[ -n "$header_name" && "$header_name" != *[$' \t\r\n:']* ]] || die "${description}.headers[$header_index].name must be a non-empty HTTP header name."
+                    header_value_type="$(yaml_read "${expression}.headers[$header_index].value | type")"
+                    header_env_type="$(yaml_read "${expression}.headers[$header_index].value_env | type")"
+                    [[ "$header_value_type" == '!!null' || "$header_value_type" == '!!str' ]] || die "${description}.headers[$header_index].value must be a string."
+                    [[ "$header_env_type" == '!!null' || "$header_env_type" == '!!str' ]] || die "${description}.headers[$header_index].value_env must be a string."
+                    [[ "$header_value_type" == '!!null' || "$header_env_type" == '!!null' ]] || die "${description}.headers[$header_index] must set only one of value or value_env."
+                    [[ "$header_value_type" != '!!null' || "$header_env_type" != '!!null' ]] || die "${description}.headers[$header_index] needs value or value_env."
+                    if [[ "$header_value_type" != '!!null' ]]; then
+                        value="$(yaml_read "${expression}.headers[$header_index].value")"
+                        [[ "$value" != *$'\r'* && "$value" != *$'\n'* ]] || die "${description}.headers[$header_index].value must not contain a newline."
+                    else
+                        validate_string "${expression}.headers[$header_index].value_env" "${description}.headers[$header_index].value_env"
+                        value="$(yaml_read "${expression}.headers[$header_index].value_env")"
+                        [[ "$value" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "${description}.headers[$header_index].value_env is not a valid environment variable name."
+                    fi
+                done
+            fi
+            value_type="$(yaml_read "${expression}.expect | type")"
+            if [[ "$value_type" != '!!null' ]]; then
+                [[ "$value_type" == '!!map' ]] || die "${description}.expect must be a map."
+                value_type="$(yaml_read "${expression}.expect.content_type | type")"
+                if [[ "$value_type" != '!!null' ]]; then
+                    validate_string "${expression}.expect.content_type" "${description}.expect.content_type"
+                    value="$(yaml_read "${expression}.expect.content_type")"
+                    [[ -n "$value" && "$value" != *$'\r'* && "$value" != *$'\n'* ]] || die "${description}.expect.content_type must not be empty or contain a newline."
+                fi
+                value_type="$(yaml_read "${expression}.expect.body_regex | type")"
+                if [[ "$value_type" != '!!null' ]]; then
+                    validate_string "${expression}.expect.body_regex" "${description}.expect.body_regex"
+                    value="$(yaml_read "${expression}.expect.body_regex")"
+                    [[ -n "$value" ]] || die "${description}.expect.body_regex must not be empty."
+                    printf '' | grep -E -- "$value" >/dev/null 2>&1
+                    pattern_status=$?
+                    (( pattern_status <= 1 )) || die "${description}.expect.body_regex is not a valid extended regular expression."
+                fi
+                value_type="$(yaml_read "${expression}.expect.max_total_ms | type")"
+                if [[ "$value_type" != '!!null' ]]; then
+                    [[ "$value_type" == '!!int' || "$value_type" == '!!str' ]] || die "${description}.expect.max_total_ms must be a positive integer."
+                    value="$(yaml_read "${expression}.expect.max_total_ms")"
+                    is_positive_integer "$value" || die "${description}.expect.max_total_ms must be a positive integer."
+                fi
             fi
             ;;
         tcp)
@@ -2215,7 +2272,8 @@ http_status_is_successful() {
 
 check_http() {
     local index="$1"
-    local url method follow_redirects timeout_value error_file http_status curl_status error_output
+    local url method follow_redirects timeout_value error_file body_file="" http_status content_type time_total curl_status error_output
+    local header_count header_index header_name header_value header_value_env expected_content_type body_regex max_total_ms curl_output
     local -a curl_command
     url="$(yaml_read "${CHECK_CONFIG_PATH}.url")"
     method="$(yaml_read "${CHECK_CONFIG_PATH}.method // \"GET\"")"
@@ -2223,29 +2281,98 @@ check_http() {
     timeout_value="$(yaml_read "${CHECK_CONFIG_PATH}.timeout // ${DEFAULT_TIMEOUT}")"
     error_file="${TEMP_DIRECTORY}/http-${index}-${RANDOM}.err"
 
-    curl_command=(curl --silent --show-error --output /dev/null --write-out '%{http_code}'
+    body_regex="$(yaml_read "${CHECK_CONFIG_PATH}.expect.body_regex // \"\"")"
+    if [[ -n "$body_regex" ]]; then
+        body_file="$(mktemp "${TEMP_DIRECTORY}/http-${index}-body.XXXXXX")" || {
+            CHECK_EXIT_CODE=2; CHECK_DETAIL='cannot create HTTP response temporary file'; return 1;
+        }
+        chmod 0600 "$body_file" 2>/dev/null || true
+        curl_command=(curl --silent --show-error --output "$body_file" --max-filesize 65536 --write-out '%{http_code}\t%{content_type}\t%{time_total}'
+            --connect-timeout "$timeout_value" --max-time "$timeout_value" --request "$method")
+    else
+        curl_command=(curl --silent --show-error --output /dev/null --write-out '%{http_code}\t%{content_type}\t%{time_total}'
         --connect-timeout "$timeout_value" --max-time "$timeout_value" --request "$method")
+    fi
+    header_count="$(yaml_read "${CHECK_CONFIG_PATH}.headers // [] | length")"
+    for ((header_index = 0; header_index < header_count; header_index++)); do
+        header_name="$(yaml_read "${CHECK_CONFIG_PATH}.headers[$header_index].name")"
+        header_value_env="$(yaml_read "${CHECK_CONFIG_PATH}.headers[$header_index].value_env // \"\"")"
+        if [[ -n "$header_value_env" ]]; then
+            header_value="${!header_value_env:-}"
+            if [[ -z "$header_value" ]]; then
+                [[ -z "$body_file" ]] || rm -f -- "$body_file"
+                CHECK_EXIT_CODE=2
+                CHECK_DETAIL="missing HTTP header environment variable ${header_value_env}"
+                return 1
+            fi
+            if [[ "$header_value" == *$'\r'* || "$header_value" == *$'\n'* ]]; then
+                [[ -z "$body_file" ]] || rm -f -- "$body_file"
+                CHECK_EXIT_CODE=2
+                CHECK_DETAIL="HTTP header environment variable ${header_value_env} contains a newline"
+                return 1
+            fi
+        else
+            header_value="$(yaml_read "${CHECK_CONFIG_PATH}.headers[$header_index].value")"
+        fi
+        curl_command+=(--header "${header_name}: ${header_value}")
+    done
     [[ "$follow_redirects" == "true" ]] && curl_command+=(--location --max-redirs 5)
     curl_command+=("$url")
 
-    http_status="$("${curl_command[@]}" 2>"$error_file")"
+    if [[ -n "$body_file" ]]; then
+        curl_output="$( ( ulimit -f 128; "${curl_command[@]}" ) 2>"$error_file")"
+    else
+        curl_output="$("${curl_command[@]}" 2>"$error_file")"
+    fi
     curl_status=$?
     error_output=""
     [[ -s "$error_file" ]] && error_output="$(sanitize_detail "$(<"$error_file")")"
     rm -f -- "$error_file"
 
+    IFS=$'\t' read -r http_status content_type time_total <<<"$curl_output"
     CHECK_HTTP_STATUS="$http_status"
     CHECK_EXIT_CODE="$curl_status"
+    CHECK_HTTP_TOTAL_MS=""
+    CHECK_HTTP_MAX_TOTAL_MS="$(yaml_read "${CHECK_CONFIG_PATH}.expect.max_total_ms // \"\"")"
+    if [[ "$time_total" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        CHECK_HTTP_TOTAL_MS="$(LC_ALL=C awk -v seconds="$time_total" 'BEGIN { printf "%.0f", seconds * 1000 }')"
+    fi
     if (( curl_status != 0 )); then
+        [[ -z "$body_file" ]] || rm -f -- "$body_file"
         CHECK_DETAIL="curl_exit=${curl_status}; HTTP ${http_status:-000}; ${error_output:-unknown error}"
         return 1
     fi
-    if http_status_is_successful "$index" "$http_status"; then
-        CHECK_DETAIL="HTTP ${http_status}"
-        return 0
+    if ! http_status_is_successful "$index" "$http_status"; then
+        [[ -z "$body_file" ]] || rm -f -- "$body_file"
+        CHECK_DETAIL="unexpected HTTP ${http_status:-unknown}"
+        return 1
     fi
-    CHECK_DETAIL="unexpected HTTP ${http_status:-unknown}"
-    return 1
+    expected_content_type="$(yaml_read "${CHECK_CONFIG_PATH}.expect.content_type // \"\"")"
+    if [[ -n "$expected_content_type" ]]; then
+        content_type="${content_type%%;*}"; content_type="${content_type,,}"
+        expected_content_type="${expected_content_type%%;*}"; expected_content_type="${expected_content_type,,}"
+        if [[ "$content_type" != "$expected_content_type" ]]; then
+            [[ -z "$body_file" ]] || rm -f -- "$body_file"
+            CHECK_DETAIL="HTTP ${http_status}; unexpected content type ${content_type:-none}"
+            return 1
+        fi
+    fi
+    if [[ -n "$body_file" ]]; then
+        if ! grep -Eq -- "$body_regex" "$body_file"; then
+            rm -f -- "$body_file"
+            CHECK_DETAIL="HTTP ${http_status}; response body did not match expect.body_regex"
+            return 1
+        fi
+        rm -f -- "$body_file"
+    fi
+    max_total_ms="$CHECK_HTTP_MAX_TOTAL_MS"
+    if [[ "$max_total_ms" =~ ^[0-9]+$ && "$CHECK_HTTP_TOTAL_MS" =~ ^[0-9]+$ ]] && (( 10#$CHECK_HTTP_TOTAL_MS > 10#$max_total_ms )); then
+        CHECK_RESULT_STATE=degraded
+        CHECK_DETAIL="HTTP ${http_status}; total=${CHECK_HTTP_TOTAL_MS}ms exceeds max_total_ms=${max_total_ms}ms"
+        return 1
+    fi
+    CHECK_DETAIL="HTTP ${http_status}${CHECK_HTTP_TOTAL_MS:+; total=${CHECK_HTTP_TOTAL_MS}ms}"
+    return 0
 }
 
 check_tcp() {
@@ -2592,14 +2719,22 @@ check_with_retries() {
     for ((attempt = 1; attempt <= attempts; attempt++)); do
         record_check_attempt "$CURRENT_SERVICE"
         log INFO "service=${CURRENT_SERVICE} action=check attempt=${attempt}/${attempts} type=${CURRENT_CHECK_TYPE}"
+        CHECK_RESULT_STATE=unavailable
         if perform_single_check "$index"; then
+            CHECK_RESULT_STATE=healthy
+            record_http_timing "$CURRENT_SERVICE"
             HISTORY_CHECK_DURATION["$CURRENT_SERVICE"]=$(( ${HISTORY_CHECK_DURATION[$CURRENT_SERVICE]:-0} + $(date '+%s') - started_epoch ))
             (( DRY_RUN == 1 )) || write_service_marker_number "$CURRENT_SERVICE" last-success "$(date '+%s')"
             log INFO "service=${CURRENT_SERVICE} result=check-success attempt=${attempt}/${attempts} detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
             return 0
         fi
-        increment_service_marker_number "$CURRENT_SERVICE" check-errors-total
-        log WARN "service=${CURRENT_SERVICE} result=check-failed attempt=${attempt}/${attempts} detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
+        record_http_timing "$CURRENT_SERVICE"
+        if [[ "$CHECK_RESULT_STATE" == degraded ]]; then
+            log WARN "service=${CURRENT_SERVICE} result=check-degraded attempt=${attempt}/${attempts} detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
+        else
+            increment_service_marker_number "$CURRENT_SERVICE" check-errors-total
+            log WARN "service=${CURRENT_SERVICE} result=check-failed attempt=${attempt}/${attempts} detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
+        fi
         if (( attempt < attempts && retry_delay > 0 )); then
             sleep "$retry_delay"
         fi
@@ -2616,11 +2751,17 @@ check_with_retries_parallel() {
     for ((attempt = 1; attempt <= attempts; attempt++)); do
         PARALLEL_ATTEMPTS_MADE="$attempt"
         printf 'service=%s action=check attempt=%s/%s type=%s\n' "$CURRENT_SERVICE" "$attempt" "$attempts" "$CURRENT_CHECK_TYPE"
+        CHECK_RESULT_STATE=unavailable
         if perform_single_check "$index"; then
+            CHECK_RESULT_STATE=healthy
             printf 'service=%s result=check-success attempt=%s/%s detail="%s"\n' "$CURRENT_SERVICE" "$attempt" "$attempts" "$(sanitize_detail "$CHECK_DETAIL")"
             return 0
         fi
-        printf 'service=%s result=check-failed attempt=%s/%s detail="%s"\n' "$CURRENT_SERVICE" "$attempt" "$attempts" "$(sanitize_detail "$CHECK_DETAIL")"
+        if [[ "$CHECK_RESULT_STATE" == degraded ]]; then
+            printf 'service=%s result=check-degraded attempt=%s/%s detail="%s"\n' "$CURRENT_SERVICE" "$attempt" "$attempts" "$(sanitize_detail "$CHECK_DETAIL")"
+        else
+            printf 'service=%s result=check-failed attempt=%s/%s detail="%s"\n' "$CURRENT_SERVICE" "$attempt" "$attempts" "$(sanitize_detail "$CHECK_DETAIL")"
+        fi
         (( attempt < attempts && retry_delay > 0 )) && sleep "$retry_delay"
     done
     return 1
@@ -2637,11 +2778,11 @@ parallel_timeout_for_service() {
 }
 
 write_parallel_result() {
-    local result_file="$1" state="$2" detail="$3" http_status="$4" exit_code="$5" attempts="$6" duration="$7" temporary detail_encoded since_encoded
+    local result_file="$1" state="$2" detail="$3" http_status="$4" exit_code="$5" attempts="$6" duration="$7" http_total_ms="${8:-}" http_max_total_ms="${9:-}" temporary detail_encoded since_encoded
     temporary="${result_file}.tmp.${BASHPID}"
     detail_encoded="$(printf '%s' "$detail" | base64 | tr -d '\n')"
     since_encoded="$(printf '%s' "$THRESHOLD_SINCE" | base64 | tr -d '\n')"
-    { printf 'state=%s\n' "$state"; printf 'detail_b64=%s\n' "$detail_encoded"; printf 'http_status=%s\n' "$http_status"; printf 'check_exit=%s\n' "$exit_code"; printf 'attempts=%s\n' "$attempts"; printf 'duration=%s\n' "$duration"; printf 'match_count=%s\n' "$MATCH_COUNT"; printf 'threshold=%s\n' "$THRESHOLD_VALUE"; printf 'comparator=%s\n' "$THRESHOLD_COMPARATOR"; printf 'since_b64=%s\n' "$since_encoded"; printf 'timestamp=%s\n' "$(date '+%s')"; } >"$temporary" && mv -f -- "$temporary" "$result_file"
+    { printf 'state=%s\n' "$state"; printf 'detail_b64=%s\n' "$detail_encoded"; printf 'http_status=%s\n' "$http_status"; printf 'http_total_ms=%s\n' "$http_total_ms"; printf 'http_max_total_ms=%s\n' "$http_max_total_ms"; printf 'check_exit=%s\n' "$exit_code"; printf 'attempts=%s\n' "$attempts"; printf 'duration=%s\n' "$duration"; printf 'match_count=%s\n' "$MATCH_COUNT"; printf 'threshold=%s\n' "$THRESHOLD_VALUE"; printf 'comparator=%s\n' "$THRESHOLD_COMPARATOR"; printf 'since_b64=%s\n' "$since_encoded"; printf 'timestamp=%s\n' "$(date '+%s')"; } >"$temporary" && mv -f -- "$temporary" "$result_file"
 }
 
 _run_single_check_bg() {
@@ -2655,7 +2796,7 @@ _run_single_check_bg() {
         exec 9>&-
         exec >"$log_file" 2>&1
         CURRENT_SERVICE="$service_name"; CHECK_CONFIG_PATH=".services[$index].check"; CURRENT_CHECK_TYPE="$(yaml_read "${CHECK_CONFIG_PATH}.type")"
-        CHECK_DETAIL=""; CHECK_HTTP_STATUS=""; CHECK_EXIT_CODE=""; MATCH_COUNT=""; THRESHOLD_VALUE=""; THRESHOLD_COMPARATOR=""; THRESHOLD_SINCE=""; PARALLEL_CHECK_MODE=1
+        CHECK_DETAIL=""; CHECK_HTTP_STATUS=""; CHECK_HTTP_TOTAL_MS=""; CHECK_HTTP_MAX_TOTAL_MS=""; CHECK_RESULT_STATE=unavailable; CHECK_EXIT_CODE=""; MATCH_COUNT=""; THRESHOLD_VALUE=""; THRESHOLD_COMPARATOR=""; THRESHOLD_SINCE=""; PARALLEL_CHECK_MODE=1
         mkdir -p -- "$TEMP_DIRECTORY" || exit 1
         started_epoch="$(date '+%s')"
         timeout_value="$(parallel_timeout_for_service "$index")"; worker_pid="$BASHPID"
@@ -2663,9 +2804,9 @@ _run_single_check_bg() {
             ( sleep "$timeout_value"; write_parallel_result "$result_file" unavailable "check timed out (parallel check timeout)" "" 124 "$PARALLEL_ATTEMPTS_MADE" "$timeout_value"; kill -KILL "$worker_pid" 2>/dev/null || true ) &
             timer_pid=$!
         fi
-        check_with_retries_parallel "$index" && check_state=healthy
+        check_with_retries_parallel "$index" && check_state=healthy || check_state="$CHECK_RESULT_STATE"
         [[ -z "$timer_pid" ]] || { kill "$timer_pid" 2>/dev/null || true; wait "$timer_pid" 2>/dev/null || true; }
-        write_parallel_result "$result_file" "$check_state" "$CHECK_DETAIL" "$CHECK_HTTP_STATUS" "$CHECK_EXIT_CODE" "$PARALLEL_ATTEMPTS_MADE" "$(( $(date '+%s') - started_epoch ))"
+        write_parallel_result "$result_file" "$check_state" "$CHECK_DETAIL" "$CHECK_HTTP_STATUS" "$CHECK_EXIT_CODE" "$PARALLEL_ATTEMPTS_MADE" "$(( $(date '+%s') - started_epoch ))" "$CHECK_HTTP_TOTAL_MS" "$CHECK_HTTP_MAX_TOTAL_MS"
         rm -rf -- "$TEMP_DIRECTORY"
     )
 }
@@ -2688,16 +2829,16 @@ collect_check_results() {
     for service_name in "${services_ref[@]}"; do
         result_file="${TEMP_DIRECTORY}/${service_name}.result"
         PRELOADED_CHECK_STATE["$service_name"]=unavailable; PRELOADED_CHECK_DETAIL["$service_name"]="check process did not write result"
-        PRELOADED_CHECK_HTTP_STATUS["$service_name"]=""; PRELOADED_CHECK_EXIT_CODE["$service_name"]=""; PRELOADED_CHECK_ATTEMPTS["$service_name"]=0; PRELOADED_CHECK_DURATION["$service_name"]=0
+        PRELOADED_CHECK_HTTP_STATUS["$service_name"]=""; PRELOADED_CHECK_HTTP_TOTAL_MS["$service_name"]=""; PRELOADED_CHECK_HTTP_MAX_TOTAL_MS["$service_name"]=""; PRELOADED_CHECK_EXIT_CODE["$service_name"]=""; PRELOADED_CHECK_ATTEMPTS["$service_name"]=0; PRELOADED_CHECK_DURATION["$service_name"]=0
         PRELOADED_MATCH_COUNT["$service_name"]=""; PRELOADED_THRESHOLD_VALUE["$service_name"]=""; PRELOADED_THRESHOLD_COMPARATOR["$service_name"]=""; PRELOADED_THRESHOLD_SINCE["$service_name"]=""
         if [[ ! -r "$result_file" ]]; then log WARN "service=${service_name} phase=check mode=parallel result=missing temp_file_missing=true action=marked_unavailable"; continue; fi
         detail_encoded=""; since_encoded=""
         while IFS='=' read -r key value; do
-            case "$key" in state) PRELOADED_CHECK_STATE["$service_name"]="$value" ;; detail_b64) detail_encoded="$value" ;; http_status) PRELOADED_CHECK_HTTP_STATUS["$service_name"]="$value" ;; check_exit) PRELOADED_CHECK_EXIT_CODE["$service_name"]="$value" ;; attempts) PRELOADED_CHECK_ATTEMPTS["$service_name"]="$value" ;; duration) PRELOADED_CHECK_DURATION["$service_name"]="$value" ;; match_count) PRELOADED_MATCH_COUNT["$service_name"]="$value" ;; threshold) PRELOADED_THRESHOLD_VALUE["$service_name"]="$value" ;; comparator) PRELOADED_THRESHOLD_COMPARATOR["$service_name"]="$value" ;; since_b64) since_encoded="$value" ;; esac
+            case "$key" in state) PRELOADED_CHECK_STATE["$service_name"]="$value" ;; detail_b64) detail_encoded="$value" ;; http_status) PRELOADED_CHECK_HTTP_STATUS["$service_name"]="$value" ;; http_total_ms) PRELOADED_CHECK_HTTP_TOTAL_MS["$service_name"]="$value" ;; http_max_total_ms) PRELOADED_CHECK_HTTP_MAX_TOTAL_MS["$service_name"]="$value" ;; check_exit) PRELOADED_CHECK_EXIT_CODE["$service_name"]="$value" ;; attempts) PRELOADED_CHECK_ATTEMPTS["$service_name"]="$value" ;; duration) PRELOADED_CHECK_DURATION["$service_name"]="$value" ;; match_count) PRELOADED_MATCH_COUNT["$service_name"]="$value" ;; threshold) PRELOADED_THRESHOLD_VALUE["$service_name"]="$value" ;; comparator) PRELOADED_THRESHOLD_COMPARATOR["$service_name"]="$value" ;; since_b64) since_encoded="$value" ;; esac
         done <"$result_file"
         [[ -z "$detail_encoded" ]] || PRELOADED_CHECK_DETAIL["$service_name"]="$(printf '%s' "$detail_encoded" | base64 --decode 2>/dev/null || true)"
         [[ -z "$since_encoded" ]] || PRELOADED_THRESHOLD_SINCE["$service_name"]="$(printf '%s' "$since_encoded" | base64 --decode 2>/dev/null || true)"
-        [[ "${PRELOADED_CHECK_STATE[$service_name]}" == healthy || "${PRELOADED_CHECK_STATE[$service_name]}" == unavailable ]] || { PRELOADED_CHECK_STATE["$service_name"]=unavailable; PRELOADED_CHECK_DETAIL["$service_name"]="invalid parallel check result"; }
+        [[ "${PRELOADED_CHECK_STATE[$service_name]}" == healthy || "${PRELOADED_CHECK_STATE[$service_name]}" == unavailable || "${PRELOADED_CHECK_STATE[$service_name]}" == degraded ]] || { PRELOADED_CHECK_STATE["$service_name"]=unavailable; PRELOADED_CHECK_DETAIL["$service_name"]="invalid parallel check result"; }
         log INFO "service=${service_name} phase=check mode=parallel result=${PRELOADED_CHECK_STATE[$service_name]} detail=\"$(sanitize_detail "${PRELOADED_CHECK_DETAIL[$service_name]}")\""
         log_file="${TEMP_DIRECTORY}/${service_name}.log"
         if [[ -r "$log_file" ]]; then
@@ -2736,6 +2877,9 @@ use_preloaded_check_result() {
     [[ -n "${PRELOADED_CHECK_STATE[$service_name]+present}" ]] || return 1
     CHECK_DETAIL="${PRELOADED_CHECK_DETAIL[$service_name]}"
     CHECK_HTTP_STATUS="${PRELOADED_CHECK_HTTP_STATUS[$service_name]}"
+    CHECK_HTTP_TOTAL_MS="${PRELOADED_CHECK_HTTP_TOTAL_MS[$service_name]:-}"
+    CHECK_HTTP_MAX_TOTAL_MS="${PRELOADED_CHECK_HTTP_MAX_TOTAL_MS[$service_name]:-}"
+    CHECK_RESULT_STATE="${PRELOADED_CHECK_STATE[$service_name]}"
     CHECK_EXIT_CODE="${PRELOADED_CHECK_EXIT_CODE[$service_name]}"
     MATCH_COUNT="${PRELOADED_MATCH_COUNT[$service_name]:-}"
     THRESHOLD_VALUE="${PRELOADED_THRESHOLD_VALUE[$service_name]:-}"
@@ -2746,10 +2890,11 @@ use_preloaded_check_result() {
     attempts="${PRELOADED_CHECK_ATTEMPTS[$service_name]:-0}"
     [[ "$attempts" =~ ^[0-9]+$ ]] || attempts=0
     for ((attempt = 0; attempt < attempts; attempt++)); do record_check_attempt "$service_name"; done
+    record_http_timing "$service_name"
     if [[ "${PRELOADED_CHECK_STATE[$service_name]}" == healthy ]]; then
         for ((attempt = 1; attempt < attempts; attempt++)); do increment_service_marker_number "$service_name" check-errors-total; done
         (( DRY_RUN == 1 )) || write_service_marker_number "$service_name" last-success "$(date '+%s')"
-    else
+    elif [[ "${PRELOADED_CHECK_STATE[$service_name]}" != degraded ]]; then
         for ((attempt = 0; attempt < attempts; attempt++)); do increment_service_marker_number "$service_name" check-errors-total; done
     fi
     log INFO "service=${service_name} action=check result=${PRELOADED_CHECK_STATE[$service_name]} source=parallel detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
@@ -3513,6 +3658,15 @@ record_check_attempt() {
     write_service_marker_number "$service_name" last-check "$(date '+%s')"
 }
 
+record_http_timing() {
+    local service_name="$1" latency_threshold=0
+    [[ "$CURRENT_CHECK_TYPE" == http && "$CHECK_HTTP_TOTAL_MS" =~ ^[0-9]+$ ]] || return 0
+    (( DRY_RUN == 0 )) || return 0
+    [[ "$CHECK_HTTP_MAX_TOTAL_MS" =~ ^[0-9]+$ ]] && latency_threshold="$CHECK_HTTP_MAX_TOTAL_MS"
+    write_service_marker_number "$service_name" http-last-total-ms "$CHECK_HTTP_TOTAL_MS"
+    write_service_marker_number "$service_name" http-latency-threshold-ms "$latency_threshold"
+}
+
 record_state_transition_timestamp() {
     local service_name="$1"
     (( DRY_RUN == 0 )) || return 0
@@ -3549,7 +3703,7 @@ write_prometheus_metrics() {
     local target temporary service_count index service_name check_type state state_value now
     local last_check last_transition failures checks remediations outage labels metric_prefix
     local errors remediation_success remediation_failed incidents incident_active incident_started incident_duration last_incident_duration
-    local last_success escalations blocked_dependency blocked_backoff blocked_flapping flapping_active backoff_until backoff_remaining
+    local last_success escalations blocked_dependency blocked_backoff blocked_flapping flapping_active backoff_until backoff_remaining http_total_ms http_latency_threshold_ms
     (( METRICS_ENABLED == 1 )) || return 0
     if (( DRY_RUN == 1 )); then
         log INFO 'result=metrics-skipped reason=dry-run'
@@ -3614,6 +3768,10 @@ write_prometheus_metrics() {
         printf '# TYPE %s_service_flapping_active gauge\n' "$metric_prefix"
         printf '# HELP %s_service_backoff_remaining_seconds Time until the next permitted remediation attempt\n' "$metric_prefix"
         printf '# TYPE %s_service_backoff_remaining_seconds gauge\n' "$metric_prefix"
+        printf '# HELP %s_service_http_last_total_seconds Duration of the most recent HTTP request\n' "$metric_prefix"
+        printf '# TYPE %s_service_http_last_total_seconds gauge\n' "$metric_prefix"
+        printf '# HELP %s_service_http_latency_slo_seconds Configured maximum HTTP request duration; zero means no SLO\n' "$metric_prefix"
+        printf '# TYPE %s_service_http_latency_slo_seconds gauge\n' "$metric_prefix"
         for ((index = 0; index < service_count; index++)); do
             service_name="$(yaml_read ".services[$index].name")"
             check_type="$(service_check_type "$index")"
@@ -3635,6 +3793,8 @@ write_prometheus_metrics() {
             blocked_dependency="$(read_service_marker_number "$service_name" blocked-dependency-total 0)"
             blocked_backoff="$(read_service_marker_number "$service_name" blocked-backoff-total 0)"
             blocked_flapping="$(read_service_marker_number "$service_name" blocked-flapping-total 0)"
+            http_total_ms="$(read_service_marker_number "$service_name" http-last-total-ms 0)"
+            http_latency_threshold_ms="$(read_service_marker_number "$service_name" http-latency-threshold-ms 0)"
             flapping_active=0; flapping_is_active "$service_name" && flapping_active=1
             backoff_until="$(read_service_marker_number "$service_name" backoff-next-attempt 0)"
             backoff_remaining=0; (( 10#$backoff_until > now )) && backoff_remaining=$((10#$backoff_until - now))
@@ -3669,11 +3829,15 @@ write_prometheus_metrics() {
             printf '%s_service_blocked_flapping_total{%s} %s\n' "$metric_prefix" "$labels" "$blocked_flapping"
             printf '%s_service_flapping_active{%s} %s\n' "$metric_prefix" "$labels" "$flapping_active"
             printf '%s_service_backoff_remaining_seconds{%s} %s\n' "$metric_prefix" "$labels" "$backoff_remaining"
+            if [[ "$check_type" == http ]]; then
+                printf '%s_service_http_last_total_seconds{%s} %.3f\n' "$metric_prefix" "$labels" "$(LC_ALL=C awk -v milliseconds="$http_total_ms" 'BEGIN { print milliseconds / 1000 }')"
+                printf '%s_service_http_latency_slo_seconds{%s} %.3f\n' "$metric_prefix" "$labels" "$(LC_ALL=C awk -v milliseconds="$http_latency_threshold_ms" 'BEGIN { print milliseconds / 1000 }')"
+            fi
         done
     } >"$temporary" || { rm -f -- "$temporary"; log ERROR "result=metrics-failed file=${target} reason=write"; return 0; }
     chmod 0644 "$temporary" 2>/dev/null || true
     if mv -f -- "$temporary" "$target"; then
-        log INFO "result=metrics-written file=${target} services=${service_count} metrics=20"
+        log INFO "result=metrics-written file=${target} services=${service_count} metrics=22"
     else
         rm -f -- "$temporary"
         log ERROR "result=metrics-failed file=${target} reason=rename"
@@ -4111,7 +4275,7 @@ service_is_required_for() {
 
 process_service() {
     local index="$1"
-    local enabled actions_count verify_after action_due=0 half_open_attempt=0 initial_check_healthy=0 has_readiness=0
+    local enabled actions_count verify_after action_due=0 half_open_attempt=0 initial_check_healthy=0 initial_check_degraded=0 has_readiness=0
     CURRENT_SERVICE="$(yaml_read ".services[$index].name")"
     if [[ "$(yaml_read ".services[$index].health | type")" == '!!map' ]]; then
         has_readiness=1
@@ -4129,6 +4293,9 @@ process_service() {
     ESCALATION_COUNT=0
     CHECK_DETAIL=""
     CHECK_HTTP_STATUS=""
+    CHECK_HTTP_TOTAL_MS=""
+    CHECK_HTTP_MAX_TOTAL_MS=""
+    CHECK_RESULT_STATE=unavailable
     CHECK_EXIT_CODE=""
     MATCH_COUNT=""
     THRESHOLD_VALUE=""
@@ -4165,11 +4332,21 @@ process_service() {
     elif check_with_retries "$index"; then
         initial_check_healthy=1
     fi
+    [[ "$CHECK_RESULT_STATE" == degraded ]] && initial_check_degraded=1
     if (( initial_check_healthy == 1 )); then
         if (( has_readiness == 1 )); then
             CHECK_CONFIG_PATH=".services[$index].health.readiness"
             CURRENT_CHECK_TYPE="$(yaml_read "${CHECK_CONFIG_PATH}.type")"
             if ! check_with_retries "$index"; then
+                if [[ "$CHECK_RESULT_STATE" == degraded ]]; then
+                    CURRENT_ACTION_STATUS="latency-slo-exceeded"
+                    update_maintenance_status "$CURRENT_SERVICE"
+                    handle_state_transition "$CURRENT_SERVICE" degraded
+                    PROCESS_RESULT=degraded
+                    UNHEALTHY_FOUND=1
+                    log WARN "service=${CURRENT_SERVICE} result=degraded action=remediation-skipped reason=latency-slo detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
+                    return 0
+                fi
                 CURRENT_ACTION_STATUS="readiness-failed"
                 update_maintenance_status "$CURRENT_SERVICE"
                 if [[ "$(read_state "$CURRENT_SERVICE")" == recovering ]]; then
@@ -4195,6 +4372,16 @@ process_service() {
         flapping_record_health "$index" "$CURRENT_SERVICE" true
         PROCESS_RESULT=healthy
         log INFO "service=${CURRENT_SERVICE} result=healthy"
+        return 0
+    fi
+
+    if (( initial_check_degraded == 1 )); then
+        CURRENT_ACTION_STATUS="latency-slo-exceeded"
+        update_maintenance_status "$CURRENT_SERVICE"
+        handle_state_transition "$CURRENT_SERVICE" degraded
+        PROCESS_RESULT=degraded
+        UNHEALTHY_FOUND=1
+        log WARN "service=${CURRENT_SERVICE} result=degraded action=remediation-skipped reason=latency-slo detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
         return 0
     fi
 

@@ -258,6 +258,15 @@ templates:
       timeout: 10
       attempts: 2
       retry_delay: 2
+
+      # For authenticated JSON endpoints, a service may additionally set:
+      # headers:
+      #   - name: Authorization
+      #     value_env: WATCHDOG_API_TOKEN
+      # expect:
+      #   content_type: application/json
+      #   body_regex: '"status"[[:space:]]*:[[:space:]]*"ok"'
+      #   max_total_ms: 800  # Reports degraded and never remediates.
     actions:
       cooldown: 300
       verify_after: 5

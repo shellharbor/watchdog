@@ -32,7 +32,7 @@ For task-oriented guides and additional runnable examples, see the
 
 ## Features
 
-- HTTP/HTTPS checks with redirects, timeouts, retries, and expected statuses
+- HTTP/HTTPS checks with redirects, timeouts, response assertions, latency SLOs, and expected statuses
 - TCP port checks using Bash `/dev/tcp`
 - Arbitrary command checks
 - Opt-in disk-space checks with free GiB and percentage thresholds
@@ -77,14 +77,14 @@ yq --version  # Must report Mike Farah yq version v4.x.x
 
 ## Quick start
 
-Download the stable `v1.1.8` source archive from GitHub:
+Download the stable `v1.2.0` source archive from GitHub:
 
 ```bash
 curl -fL \
-  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.1.8.zip \
+  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.2.0.zip \
   -o watchdog.zip
 unzip watchdog.zip
-cd watchdog-1.1.8
+cd watchdog-1.2.0
 ```
 
 Alternatively, clone the repository with Git:
@@ -225,6 +225,38 @@ Required fields: `type: http` and `url`. By default, any final `2xx` response is
 successful. Set `success_status` to an explicit list when needed. A timeout,
 connection error, empty response, `HTTP 000`, or unexpected status is a failed
 attempt.
+
+`headers` adds request headers. Use `value_env` for credentials rather than a
+literal `value`: Watchdog validates the variable name, reads it only at request
+time, and never writes its value to logs, state, metrics, history, or the status
+page. `expect.content_type` compares a response media type while ignoring its
+parameters; `expect.body_regex` requires an extended-regex match in a temporary
+response capture limited to 64 KiB. Neither exposes response content in logs.
+
+```yaml
+services:
+  - name: authenticated-api
+    check:
+      type: http
+      url: https://api.example.com/health
+      headers:
+        - name: Accept
+          value: application/json
+        - name: Authorization
+          value_env: WATCHDOG_API_TOKEN
+      expect:
+        content_type: application/json
+        body_regex: '"status"[[:space:]]*:[[:space:]]*"ok"'
+        max_total_ms: 800
+```
+
+If an accepted response takes longer than `max_total_ms`, Watchdog records the
+service as `degraded`, sends the usual transition notification, and exports its
+latency metrics. It intentionally does **not** run remediation, affect circuit
+breakers/backoff/flapping protection, or increment unavailable counters. An
+unexpected content type or body mismatch remains an ordinary failed check.
+See [`examples/smart-http.yaml`](examples/smart-http.yaml) for a complete,
+safe-to-adapt configuration.
 
 #### TCP
 
@@ -755,9 +787,12 @@ includes service state (0 healthy, 1 unavailable, 2 unknown, 3 dependency
 failed, 4 degraded, 5 recovering), check/error counters, remediation attempts
 and outcomes, incident count and current/last duration, last successful check,
 escalation count, dependency/backoff/flapping blocks, flapping guard, and
-backoff time remaining. Labels are limited to configured service/check type
-and optional static labels; incident IDs, command output, and secrets are not
-labels. For example, alert when
+backoff time remaining. HTTP services also export
+`watchdog_service_http_last_total_seconds` and
+`watchdog_service_http_latency_slo_seconds`; the SLO value is zero when no
+`max_total_ms` is configured. Labels are limited to configured service/check type
+and optional static labels; incident IDs, command output, response bodies, and
+secrets are not labels. For example, alert when
 `watchdog_service_state{service="api"} == 1`.
 
 ```text
@@ -1464,7 +1499,8 @@ bash ./tests/run-all.sh
 new test script is not registered, then runs every listed scenario in a
 deterministic order. GitHub Actions runs this same suite on pushes and pull
 requests. The schema test requires Mike Farah `yq` v4 and Python's `jsonschema`
-package; CI installs both.
+package; CI installs both. `tests/smart-http.sh` covers secret headers, content
+assertions, latency degradation, no-remediation behavior, and metric output.
 
 ## License
 

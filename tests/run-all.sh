@@ -24,6 +24,7 @@ readonly TEST_SCRIPTS=(
     reliability.sh
     schema.sh
     security.sh
+    smart-http.sh
     smoke.sh
     status-command.sh
     status-page.sh

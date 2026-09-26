@@ -64,6 +64,8 @@ expected_fields = {
     "email-secrets": "notifications.email.smtp.password_env",
     "history-relative-path": "history.path",
     "history-storage": "history.storage",
+    "http-header-values": "services[0].check.headers[0]",
+    "http-latency-zero": "services[0].check.expect.max_total_ms",
     "maintenance-time": "maintenance.windows[0].time",
     "missing-command": "services[0].check.commands",
     "only-if-days": "services[0].only_if[0].days",

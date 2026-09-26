@@ -7,6 +7,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-26
+
+### Added
+
+- Smart HTTP checks: direct request headers with secret-safe `value_env`,
+  optional response content-type and bounded body-regex assertions, and a
+  `max_total_ms` latency SLO.
+- HTTP latency gauges for Prometheus plus a schema-annotated Smart HTTP example
+  and dedicated regression coverage for assertions, secret redaction,
+  degradation, no-remediation behavior, and invalid configuration.
+
+### Changed
+
+- A successful HTTP response that exceeds `max_total_ms` is now represented as
+  `degraded`, with transition alerts and metrics but without remediation,
+  circuit-breaker, backoff, flapping, escalation, or unavailable-counter side
+  effects.
+
 ## [1.1.8] - 2026-09-26
 
 ### Added
@@ -116,7 +134,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Quick Start now uses the stable `v1.0.3` source archive.
 - Expanded repository ignore rules and troubleshooting documentation.
 
-[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.1.8...HEAD
+[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/shellharbor/watchdog/compare/v1.1.8...v1.2.0
 [1.1.8]: https://github.com/shellharbor/watchdog/compare/v1.1.7...v1.1.8
 [1.1.7]: https://github.com/shellharbor/watchdog/compare/v1.1.6...v1.1.7
 [1.1.6]: https://github.com/shellharbor/watchdog/compare/v1.1.4...v1.1.6
