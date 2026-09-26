@@ -171,9 +171,9 @@ main() {
     fi
 
     write_prometheus_metrics
+    write_history
     generate_status_page
     federation_agent_send_report
-    write_history
 
     if (( UNHEALTHY_FOUND == 1 || ACTION_ATTEMPTED == 1 )); then
         log WARN "action=watchdog-finish exit=1 unhealthy=${UNHEALTHY_FOUND} remediation=${ACTION_ATTEMPTED}"

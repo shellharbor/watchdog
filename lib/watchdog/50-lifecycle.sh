@@ -481,6 +481,76 @@ status_page_overall_status() {
     (( degraded == 1 )) && printf '%s' degraded || printf '%s' operational
 }
 
+status_page_uptime_visual_state() {
+    case "$1" in
+        healthy) printf '%s' healthy ;;
+        unavailable|dependency_failed) printf '%s' down ;;
+        degraded|recovering) printf '%s' warning ;;
+        *) printf '%s' unknown ;;
+    esac
+}
+
+status_page_load_uptime_history() {
+    local now="$1" timestamp service_name state epoch bucket key previous_epoch
+
+    (( STATUS_PAGE_UPTIME_ENABLED == 1 )) || return 0
+    STATUS_PAGE_UPTIME_CUTOFF=$((now - STATUS_PAGE_UPTIME_DAYS * 86400))
+    STATUS_PAGE_UPTIME_BUCKET_SECONDS=$(((STATUS_PAGE_UPTIME_DAYS * 86400 + STATUS_PAGE_UPTIME_BUCKETS - 1) / STATUS_PAGE_UPTIME_BUCKETS))
+    STATUS_PAGE_UPTIME_STATE=()
+    STATUS_PAGE_UPTIME_EPOCH=()
+    STATUS_PAGE_UPTIME_OBSERVED=()
+    while IFS=$'\t' read -r timestamp service_name state; do
+        [[ "$service_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || continue
+        epoch="$(date -d "$timestamp" '+%s' 2>/dev/null)" || continue
+        (( epoch >= STATUS_PAGE_UPTIME_CUTOFF && epoch <= now )) || continue
+        bucket=$(((epoch - STATUS_PAGE_UPTIME_CUTOFF) / STATUS_PAGE_UPTIME_BUCKET_SECONDS))
+        (( bucket < STATUS_PAGE_UPTIME_BUCKETS )) || bucket=$((STATUS_PAGE_UPTIME_BUCKETS - 1))
+        key="${service_name}:${bucket}"
+        previous_epoch="${STATUS_PAGE_UPTIME_EPOCH[$key]:-0}"
+        (( epoch >= previous_epoch )) || continue
+        STATUS_PAGE_UPTIME_STATE["$key"]="$(status_page_uptime_visual_state "$state")"
+        STATUS_PAGE_UPTIME_EPOCH["$key"]="$epoch"
+        STATUS_PAGE_UPTIME_OBSERVED["$key"]=1
+    done < <(history_rows)
+}
+
+status_page_uptime_bar() {
+    local service_name="$1" bucket key state label class summary percent
+    local observed=0 healthy=0
+
+    (( STATUS_PAGE_UPTIME_ENABLED == 1 )) || return 0
+    for ((bucket = 0; bucket < STATUS_PAGE_UPTIME_BUCKETS; bucket++)); do
+        key="${service_name}:${bucket}"
+        [[ "${STATUS_PAGE_UPTIME_OBSERVED[$key]:-0}" == 1 ]] || continue
+        observed=$((observed + 1))
+        [[ "${STATUS_PAGE_UPTIME_STATE[$key]:-unknown}" == healthy ]] && healthy=$((healthy + 1))
+    done
+    if (( observed == 0 )); then
+        summary="No observations in the last ${STATUS_PAGE_UPTIME_DAYS} days"
+    else
+        percent="$(LC_ALL=C awk -v healthy="$healthy" -v observed="$observed" 'BEGIN { printf "%.1f", 100 * healthy / observed }')"
+        summary="Observed availability: ${percent}% (${healthy}/${observed} observed intervals; last ${STATUS_PAGE_UPTIME_DAYS} days)"
+    fi
+    printf '<div class="uptime"><small class="uptime-summary">%s</small><div class="uptime-bars" style="grid-template-columns:repeat(%s,minmax(4px,1fr))" role="img" aria-label="Observed availability for %s over the last %s days">' \
+        "$(escape_status_html "$summary")" "$STATUS_PAGE_UPTIME_BUCKETS" "$(escape_status_html "$service_name")" "$STATUS_PAGE_UPTIME_DAYS"
+    for ((bucket = 0; bucket < STATUS_PAGE_UPTIME_BUCKETS; bucket++)); do
+        key="${service_name}:${bucket}"
+        state="${STATUS_PAGE_UPTIME_STATE[$key]:-unknown}"
+        if [[ "${STATUS_PAGE_UPTIME_OBSERVED[$key]:-0}" != 1 ]]; then
+            class='uptime-unknown'; label='No observation'
+        else
+            case "$state" in
+                healthy) class='uptime-healthy'; label='Observed healthy' ;;
+                down) class='uptime-down'; label='Observed unavailable' ;;
+                warning) class='uptime-warning'; label='Observed degraded' ;;
+                *) class='uptime-unknown'; label='Observed unknown' ;;
+            esac
+        fi
+        printf '<span class="uptime-bar %s" title="%s"></span>' "$class" "$label"
+    done
+    printf '</div></div>\n'
+}
+
 status_page_service_card() {
     local service_name="$1" check_type="$2" state="$3" last_check="$4" last_transition="$5" label class
     case "$state" in
@@ -491,10 +561,12 @@ status_page_service_card() {
         recovering) label='Recovering'; class='warning' ;;
         *) label='Unknown'; class='warning' ;;
     esac
-    printf '<article class="service"><div><strong>%s</strong><small>%s · last check: %s · changed: %s</small></div><span class="status %s">● %s</span></article>\n' \
+    printf '<article class="service"><div><strong>%s</strong><small>%s · last check: %s · changed: %s</small></div><span class="status %s">● %s</span>' \
         "$(escape_status_html "$service_name")" "$(escape_status_html "$check_type")" \
         "$(escape_status_html "$(format_status_timestamp "$last_check")")" \
         "$(escape_status_html "$(format_status_timestamp "$last_transition")")" "$class" "$label"
+    status_page_uptime_bar "$service_name"
+    printf '</article>\n'
 }
 
 generate_status_page() {
@@ -515,11 +587,12 @@ generate_status_page() {
     logo="$(yaml_read '.status_page.logo_url // ""')"; footer="$(yaml_read '.status_page.footer // "Powered by Watchdog"')"; refresh="$(yaml_read '.status_page.auto_refresh // 0')"
     primary="$(yaml_read '.status_page.theme.primary // "2563eb"')"; danger="$(yaml_read '.status_page.theme.danger // "dc2626"')"; warning="$(yaml_read '.status_page.theme.warning // "f59e0b"')"; bg="$(yaml_read '.status_page.theme.bg // "f8fafc"')"; card="$(yaml_read '.status_page.theme.card // "ffffff"')"; text_color="$(yaml_read '.status_page.theme.text // "1e293b"')"; muted="$(yaml_read '.status_page.theme.muted // "64748b"')"
     overall="$(status_page_overall_status)"; generated="$(date '+%Y-%m-%d %H:%M:%S %z')"; service_count="$(yaml_read '.services | length')"
+    status_page_load_uptime_history "$(date '+%s')"
     case "$overall" in operational) overall_label='All Systems Operational'; overall_class='healthy' ;; major_outage) overall_label='Major Outage'; overall_class='down' ;; *) overall_label='Partial Outage'; overall_class='warning' ;; esac
     {
         printf '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">\n'
         (( refresh > 0 )) && printf '<meta http-equiv="refresh" content="%s">\n' "$refresh"
-        printf '<title>%s</title><style>:root{--p:#%s;--d:#%s;--w:#%s;--bg:#%s;--card:#%s;--text:#%s;--muted:#%s}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}.wrap{max-width:850px;margin:auto;padding:32px 18px}header{text-align:center;margin-bottom:26px}h1{margin:8px 0}p,small,footer{color:var(--muted)}.overall,.service{background:var(--card);border-radius:12px;padding:16px;margin:12px 0;box-shadow:0 1px 3px #0001}.overall{text-align:center;font-weight:700}.service{display:flex;align-items:center;justify-content:space-between;gap:16px}.service small{display:block;margin-top:5px}.status{white-space:nowrap}.healthy{color:var(--p)}.down{color:var(--d)}.warning{color:var(--w)}footer{text-align:center;margin-top:28px;font-size:13px}@media(max-width:550px){.service{align-items:flex-start;flex-direction:column;gap:7px}}</style></head><body><main class="wrap"><header>' "$(escape_status_html "$title")" "$primary" "$danger" "$warning" "$bg" "$card" "$text_color" "$muted"
+        printf '<title>%s</title><style>:root{--p:#%s;--d:#%s;--w:#%s;--bg:#%s;--card:#%s;--text:#%s;--muted:#%s}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}.wrap{max-width:850px;margin:auto;padding:32px 18px}header{text-align:center;margin-bottom:26px}h1{margin:8px 0}p,small,footer{color:var(--muted)}.overall,.service{background:var(--card);border-radius:12px;padding:16px;margin:12px 0;box-shadow:0 1px 3px #0001}.overall{text-align:center;font-weight:700}.service{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px}.service small{display:block;margin-top:5px}.status{white-space:nowrap}.uptime{display:grid;gap:6px;width:100%%}.uptime-summary{font-size:13px}.uptime-bars{display:grid;gap:3px}.uptime-bar{height:9px;border-radius:2px;background:#cbd5e1}.uptime-healthy{background:var(--p)}.uptime-down{background:var(--d)}.uptime-warning{background:var(--w)}.uptime-unknown{background:#cbd5e1}.healthy{color:var(--p)}.down{color:var(--d)}.warning{color:var(--w)}footer{text-align:center;margin-top:28px;font-size:13px}@media(max-width:550px){.service{align-items:flex-start;flex-direction:column;gap:7px}}</style></head><body><main class="wrap"><header>' "$(escape_status_html "$title")" "$primary" "$danger" "$warning" "$bg" "$card" "$text_color" "$muted"
         [[ -z "$logo" ]] || printf '<img src="%s" alt="" style="max-height:56px">' "$(escape_status_html "$logo")"
         printf '<h1>%s</h1><p>%s</p></header><div class="overall %s">%s</div><section><h2>Services</h2>\n' "$(escape_status_html "$title")" "$(escape_status_html "$description")" "$overall_class" "$overall_label"
         for ((index = 0; index < service_count; index++)); do
@@ -1121,4 +1194,3 @@ process_service() {
     log ERROR "service=${CURRENT_SERVICE} result=unavailable detail=\"$(sanitize_detail "$CHECK_DETAIL")\""
     return 0
 }
-

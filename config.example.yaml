@@ -114,6 +114,12 @@ status_page:
   logo_url: ""
   auto_refresh: 60
   footer: Powered by Watchdog
+  # Requires history.enabled: true when enabled. Grey bars mean no recorded
+  # observation, not a failed check or a continuous-time availability claim.
+  uptime:
+    enabled: false
+    days: 30
+    buckets: 30
   theme:
     primary: "2563eb"
     danger: "dc2626"

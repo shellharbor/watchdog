@@ -22,6 +22,7 @@ service names, and commands before enabling scheduled runs.
 | [`auto-discovery/`](auto-discovery) | Generate a draft `services:` fragment from static Compose and systemd files |
 | [`notify-test.yaml`](notify-test.yaml) | Test notification delivery explicitly after filling in SMTP settings and secrets |
 | [`status-cli.yaml`](status-cli.yaml) | Read a service's persisted state with the terminal `status` command |
+| [`status-page-uptime.yaml`](status-page-uptime.yaml) | Publish a static status page with 30 days of observed-availability bars |
 
 Validate YAML and policy without running any checks or creating runtime state:
 

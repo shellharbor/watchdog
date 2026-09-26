@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-09-26
+
+### Added
+
+- Opt-in Status Page observed-availability bars backed by existing JSONL or
+  SQLite history. They render the latest sampled result across configurable
+  trailing-day intervals without introducing a web service or UI dependency.
+
 ### Changed
 
 - Watchdog's maintainable source is now split into ordered `lib/watchdog/`

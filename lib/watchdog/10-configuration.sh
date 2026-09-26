@@ -740,9 +740,24 @@ validate_metrics_configuration() {
 }
 
 validate_status_page_configuration() {
-    local enabled value theme_key type refresh
+    local enabled value theme_key type refresh uptime_type uptime_enabled
     enabled="$(yaml_read '.status_page.enabled // false')"
     [[ "$enabled" == true || "$enabled" == false ]] || die "status_page.enabled must be true or false."
+    uptime_type="$(yaml_read '.status_page.uptime | type')"
+    [[ "$uptime_type" == '!!null' || "$uptime_type" == '!!map' ]] || die 'status_page.uptime must be a map.'
+    uptime_enabled="$(yaml_read '.status_page.uptime.enabled // false')"
+    [[ "$uptime_enabled" == true || "$uptime_enabled" == false ]] || die 'status_page.uptime.enabled must be true or false.'
+    for theme_key in days buckets; do
+        type="$(yaml_read ".status_page.uptime.${theme_key} | type")"
+        [[ "$type" == '!!null' ]] && continue
+        value="$(yaml_read ".status_page.uptime.${theme_key}")"
+        is_positive_integer "$value" || die "status_page.uptime.${theme_key} must be a positive integer."
+        (( 10#$value <= 365 )) || die "status_page.uptime.${theme_key} must not exceed 365."
+    done
+    if [[ "$uptime_enabled" == true ]]; then
+        [[ "$enabled" == true ]] || die 'status_page.uptime.enabled requires status_page.enabled=true.'
+        [[ "$(yaml_read '.history.enabled // false')" == true ]] || die 'status_page.uptime.enabled requires history.enabled=true.'
+    fi
     [[ "$enabled" == true ]] || return 0
     validate_string '.status_page.output_directory' 'status_page.output_directory'
     value="$(yaml_read '.status_page.output_directory')"
@@ -1359,11 +1374,19 @@ configure_metrics() {
 }
 
 configure_status_page() {
+    local value
+
     [[ "$(yaml_read '.status_page.enabled // false')" == true ]] || return 0
     STATUS_PAGE_ENABLED=1
     STATUS_PAGE_DIRECTORY="$(yaml_read '.status_page.output_directory')"
     STATUS_PAGE_HTML_FILENAME="$(yaml_read '.status_page.html_filename // "index.html"')"
     STATUS_PAGE_JSON_FILENAME="$(yaml_read '.status_page.json_filename // ""')"
+    [[ "$(yaml_read '.status_page.uptime.enabled // false')" == true ]] || return 0
+    STATUS_PAGE_UPTIME_ENABLED=1
+    value="$(yaml_read '.status_page.uptime.days // 30')"
+    STATUS_PAGE_UPTIME_DAYS="$((10#$value))"
+    value="$(yaml_read '.status_page.uptime.buckets // 30')"
+    STATUS_PAGE_UPTIME_BUCKETS="$((10#$value))"
 }
 
 configure_federation() {
@@ -1434,4 +1457,3 @@ log_configured_sequence_plan() {
         log INFO "service=${service_name} action=${label}-command index=${command_index} result=would-run command=${formatted}"
     done
 }
-

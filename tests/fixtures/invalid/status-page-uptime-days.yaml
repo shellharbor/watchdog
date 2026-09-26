@@ -1,0 +1,20 @@
+settings:
+  log_file: /tmp/watchdog-status-uptime-invalid.log
+  lock_file: /tmp/watchdog-status-uptime-invalid.lock
+  state_directory: /tmp/watchdog-status-uptime-invalid-state
+history:
+  enabled: true
+  storage: jsonl
+  path: /tmp/watchdog-status-uptime-invalid-history
+status_page:
+  enabled: true
+  output_directory: /tmp/watchdog-status-uptime-invalid-page
+  uptime:
+    enabled: true
+    days: 0
+services:
+  - name: api
+    check:
+      type: command
+      commands:
+        - command: [/bin/true]

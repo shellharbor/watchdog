@@ -21,6 +21,7 @@
   },
   "if": { "properties": { "federation": { "properties": { "hub": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["hub"] } }, "required": ["federation"] },
   "else": { "properties": { "services": { "minItems": 1 } } },
+  "allOf": [{ "if": { "properties": { "status_page": { "properties": { "uptime": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["uptime"] } }, "required": ["status_page"] }, "then": { "properties": { "status_page": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "history": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["history"] } }],
   "additionalProperties": false,
   "$defs": {
     "name": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$", "description": "Service, template or node identifier." },
@@ -320,6 +321,11 @@
       "logo_url": { "type": "string", "default": "", "description": "Optional logo URL." },
       "auto_refresh": { "$ref": "#/$defs/nonNegativeInteger", "default": 0, "description": "Browser refresh interval in seconds; 0 disables refresh." },
       "footer": { "type": "string", "default": "Powered by Watchdog", "description": "Footer text." },
+      "uptime": { "type": "object", "description": "Optional observed-availability bars sourced from history snapshots.", "properties": {
+        "enabled": { "type": "boolean", "default": false, "description": "Render observed-availability bars; requires status_page.enabled and history.enabled." },
+        "days": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 365 }, { "type": "string", "pattern": "^0*(?:[1-9]|[1-9][0-9]|[12][0-9]{2}|3[0-5][0-9]|36[0-5])$" }], "default": 30, "description": "Trailing calendar duration represented by the bars." },
+        "buckets": { "oneOf": [{ "type": "integer", "minimum": 1, "maximum": 365 }, { "type": "string", "pattern": "^0*(?:[1-9]|[1-9][0-9]|[12][0-9]{2}|3[0-5][0-9]|36[0-5])$" }], "default": 30, "description": "Number of equal observed-availability intervals to render." }
+      }, "additionalProperties": false },
       "theme": { "type": "object", "properties": {
         "primary": { "type": "string", "pattern": "^(?:$|[0-9A-Fa-f]{6})$", "default": "2563eb", "description": "Primary RGB hex color without #; empty uses the default." },
         "danger": { "type": "string", "pattern": "^(?:$|[0-9A-Fa-f]{6})$", "default": "dc2626", "description": "Down RGB hex color without #; empty uses the default." },

@@ -44,7 +44,7 @@ For task-oriented guides and additional runnable examples, see the
 - Optional persistent flapping guard and exponential action backoff
 - Dependency-ordered checks and separate liveness/readiness endpoints
 - Bounded incident history, expanded Prometheus textfile metrics, and opt-in action allowlist
-- Optional per-check history, uptime reports, and ASCII trends
+- Optional per-check history, uptime reports, ASCII trends, and static observed-availability bars
 - Optional health verification after remediation
 - Failure and recovery hooks with environment variables
 - Built-in SMTP email alerts with YAML-configured templates and recipients
@@ -81,14 +81,14 @@ yq --version  # Must report Mike Farah yq version v4.x.x
 
 ## Quick start
 
-Download the stable `v1.4.0` source archive from GitHub:
+Download the stable `v1.5.0` source archive from GitHub:
 
 ```bash
 curl -fL \
-  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.4.0.zip \
+  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.5.0.zip \
   -o watchdog.zip
 unzip watchdog.zip
-cd watchdog-1.4.0
+cd watchdog-1.5.0
 ```
 
 Alternatively, clone the repository with Git:
@@ -1175,6 +1175,10 @@ status_page:
   title: My Services Status
   description: Real-time availability of monitored services
   auto_refresh: 60
+  uptime:
+    enabled: true
+    days: 30
+    buckets: 30
 ```
 
 Serve the generated directory with nginx:
@@ -1198,6 +1202,14 @@ location /status {
 
 Files are atomically replaced, so nginx, Apache, Caddy, or static hosting can
 serve them safely without a runtime dependency beyond Watchdog itself.
+
+`status_page.uptime` is opt-in and requires `history.enabled: true`. It renders
+one CSS bar per equal interval across the trailing `days` window; `buckets`
+defaults to `30`. Green means the latest recorded observation in that interval
+was healthy, orange means degraded or recovering, red means unavailable or a
+dependency failure, and grey means no observation. This is sampled, observed
+availability—not a continuous-time SLA. Set history retention to at least the
+same number of days so earlier bars do not become grey through rotation.
 
 ### Hooks and integrations
 

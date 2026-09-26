@@ -196,6 +196,10 @@ status_page:
   description: Availability of public services
   auto_refresh: 60
   footer: Powered by Watchdog
+  uptime:
+    enabled: true
+    days: 30
+    buckets: 30
   theme:
     primary: "2563eb"
     danger: "dc2626"
@@ -209,3 +213,11 @@ status_page:
 The monitor account needs safe write permission to the output directory. Do
 not place authentication tokens, raw check output, or configuration files in a
 published location.
+
+`status_page.uptime` is disabled by default and requires `history.enabled:
+true`. It adds dependency-free CSS bars for equal intervals across the trailing
+`days` window. The last recorded observation in an interval determines its
+color: green for healthy, orange for degraded/recovering, red for
+unavailable/dependency failure, and grey when no observation exists. These are
+observed samples rather than a continuous-time SLA. Keep history retention at
+least as long as `uptime.days` to retain the intended window.

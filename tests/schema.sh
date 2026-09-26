@@ -72,6 +72,8 @@ expected_fields = {
     "security-clamav-path": "services[0].check.path",
     "security-threshold-comparator": "services[0].check.comparator",
     "security-threshold-source": "services[0].check.source.type",
+    "status-page-uptime-history": "status_page.uptime.enabled",
+    "status-page-uptime-days": "status_page.uptime.days",
     "tcp-port": "services[0].check.port",
     "tls-missing-threshold": "services[0].check",
 }

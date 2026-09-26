@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+settings:
+  log_file: /var/log/service-watchdog/watchdog.log
+  lock_file: /run/service-watchdog/watchdog.lock
+  state_directory: /var/lib/service-watchdog/state
+  default_attempts: 1
+  default_retry_delay: 0
+
+# History is the source for observed-availability bars. Keep retention at least
+# as long as status_page.uptime.days to avoid all-grey historical intervals.
+history:
+  enabled: true
+  storage: jsonl
+  path: /var/lib/service-watchdog/history
+  rotation:
+    mode: daily
+    max_age_days: 30
+
+status_page:
+  enabled: true
+  output_directory: /var/www/watchdog-status
+  html_filename: index.html
+  json_filename: status.json
+  title: Production Status
+  description: Recent observed availability of public services
+  auto_refresh: 60
+  uptime:
+    enabled: true
+    days: 30
+    buckets: 30
+
+services:
+  - name: api
+    check:
+      type: http
+      url: https://api.example.com/health
+      timeout: 10
+      attempts: 1

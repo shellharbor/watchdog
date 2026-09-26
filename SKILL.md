@@ -34,6 +34,9 @@ projects.
   must verify `openssl` only when enabled, pass host and SNI as separate argv
   values, and expose expiry context without logging or persisting certificate
   contents.
+- `status_page.uptime` is opt-in and requires `history.enabled: true`. It
+  renders only sampled, observed availability from history: preserve grey
+  intervals when no record exists and never present the bars as an SLA.
 - `--dry-run` may perform checks but must not persist state/history/metrics or
   send notifications, run actions, or run hooks. `validate`, `status`,
   `--report`, and `--trend` must not run checks. `status`, reports, and trends
