@@ -68,6 +68,8 @@ settings:
 metrics:
   enabled: true
   textfile_directory: ${TEST_DIRECTORY}/metrics
+  filename: watchdog.prom
+  prefix: watchdog
 services:
   - name: smart-ok
     check:

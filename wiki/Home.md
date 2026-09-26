@@ -22,6 +22,9 @@ and threshold before scheduling a production run.
 - [Code of Conduct](../CODE_OF_CONDUCT.md) defines a respectful collaboration
   standard for issues, pull requests, and other project spaces.
 - [Releasing](../RELEASING.md) documents the version/tag verification process.
+- [OpenSSF Scorecard](https://scorecard.dev/viewer/?uri=github.com/shellharbor/watchdog)
+  publishes a public supply-chain security assessment after the first workflow
+  run; its live badge is shown in the README.
 
 ## Start here
 

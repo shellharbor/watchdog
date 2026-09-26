@@ -7,6 +7,12 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- An OpenSSF Scorecard GitHub Actions workflow that publishes signed supply-chain
+  security results to GitHub Code Scanning and the public Scorecard service,
+  plus a live README badge.
+
 ## [1.2.0] - 2026-09-26
 
 ### Added
