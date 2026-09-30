@@ -60,10 +60,37 @@ test_directory="$(mktemp -d)"
 runtime_container="watchdog-runtime-cycle-${BASHPID}"
 health_container="watchdog-runtime-health-${BASHPID}"
 
+assert_persisted_runtime_state() {
+    docker run --rm \
+        --network none \
+        --read-only \
+        --cap-drop ALL \
+        --security-opt no-new-privileges \
+        --user 10001:10001 \
+        --volume "${test_directory}/state:/var/lib/watchdog:ro" \
+        --entrypoint test \
+        "$runtime_image" -f /var/lib/watchdog/state/container-runtime.state
+}
+
 cleanup() {
     docker rm --force "$runtime_container" "$health_container" >/dev/null 2>&1 || true
-    docker image rm --force "$runtime_image" "$docker_image" >/dev/null 2>&1 || true
+    # The runtime deliberately changes its state directory to mode 0750. Give
+    # the host-side temporary test directory back to its creator before cleanup
+    # without weakening the production image's restrictive state permissions.
+    if [[ -d "${test_directory}/state" ]]; then
+        docker run --rm \
+            --network none \
+            --cap-drop ALL \
+            --cap-add DAC_OVERRIDE \
+            --cap-add FOWNER \
+            --security-opt no-new-privileges \
+            --user 0:0 \
+            --volume "${test_directory}/state:/state" \
+            --entrypoint chmod \
+            "$runtime_image" -R a+rwx /state >/dev/null 2>&1 || true
+    fi
     rm -rf -- "$test_directory"
+    docker image rm --force "$runtime_image" "$docker_image" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -151,8 +178,12 @@ docker run --detach --name "$runtime_container" \
     --volume "${test_directory}/config.yaml:/etc/watchdog/config.yaml:ro" \
     "$runtime_image" >/dev/null
 
-[[ "$(docker wait "$runtime_container")" == 0 ]] || fail 'representative healthy cycle did not exit 0'
-[[ -f "${test_directory}/state/state/container-runtime.state" ]] || fail 'healthy cycle did not persist state to the mounted volume'
+runtime_exit="$(docker wait "$runtime_container")"
+if [[ "$runtime_exit" != 0 ]]; then
+    docker logs "$runtime_container" >&2 || true
+    fail "representative healthy cycle exited ${runtime_exit}, expected 0"
+fi
+assert_persisted_runtime_state || fail 'healthy cycle did not persist state to the mounted volume'
 [[ "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "$runtime_container")" == true ]] || fail 'runtime cycle was not read-only'
 [[ "$(docker inspect --format '{{.HostConfig.Privileged}}' "$runtime_container")" == false ]] || fail 'runtime cycle was privileged'
 if docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "$runtime_container" | grep -Fx '/var/run/docker.sock' >/dev/null; then
