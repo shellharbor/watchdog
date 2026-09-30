@@ -111,6 +111,27 @@ services:
 Templates cannot inherit from other templates. They may omit fields because
 they are completed when a service references them.
 
+## Service notification routing
+
+The top-level `notifications` section enables delivery providers. A service
+may then selectively route its own events and attach operational context:
+
+```yaml
+services:
+  - name: orders-api
+    check: {type: http, url: https://orders.example.com/health}
+    notify:
+      channels: [email, pagerduty]
+      severity: error
+      runbook_url: https://runbooks.example.com/orders-api
+```
+
+`channels` is optional; without it, all globally enabled channels are used.
+The supported values are `email`, `telegram`, `discord`, `slack`, `ntfy`,
+`pagerduty`, and `opsgenie`. `severity` is one of `info`, `warning`, `error`,
+or `critical`. `runbook_url` is an HTTP(S) URL and must not contain secrets.
+These fields merge normally through service templates.
+
 ## Conditional checks (`only_if`)
 
 All configured conditions must pass before the service is checked. A failed

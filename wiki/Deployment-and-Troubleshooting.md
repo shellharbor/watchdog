@@ -4,6 +4,102 @@ Watchdog is designed for a scheduler. Treat its configuration, binaries,
 environment files, state directory, and output directories as an operational
 security boundary.
 
+## Docker deployment
+
+Docker is an optional packaging and scheduling surface; native single-file,
+systemd, and cron deployments remain supported. The production runtime image is
+built from [`packaging/docker/Dockerfile`](../packaging/docker/Dockerfile).
+This is distinct from the root `Dockerfile`, which belongs exclusively to the
+GitHub Marketplace configuration-validation Action.
+
+Copy the container-specific configuration, adapt its sample endpoint, and make
+the persistent directory writable by the image's fixed non-root user:
+
+```bash
+cp packaging/docker/config.example.yaml config.yaml
+mkdir -p state
+sudo chown -R 10001:10001 state
+docker compose -f docker-compose.example.yml run --rm watchdog validate
+docker compose -f docker-compose.example.yml run --rm watchdog
+```
+
+The default Compose service mounts only `config.yaml` read-only and `state/` at
+`/var/lib/watchdog`. The supplied configuration places state and the operational
+log in that mounted location. Add an explicit mount when enabling history,
+Prometheus textfile metrics, or a generated status page outside it. The image
+runs as UID/GID `10001`, has a read-only root filesystem, drops all capabilities,
+sets `no-new-privileges`, and gives only `/tmp` a small writable tmpfs. It does
+not use privileged mode, host networking, host filesystem mounts, or the Docker
+socket.
+
+Container checks observe the container network and only filesystems deliberately
+mounted into it. A disk check cannot see host capacity without a specific
+read-only host mount, and `127.0.0.1` targets the Watchdog container rather
+than the host. Host `systemctl` commands are unavailable. Docker CLI actions
+need the separate socket profile below. A ClamAV check also needs an explicitly
+mounted scan path and current virus definitions; neither is silently bundled as
+host access.
+
+The image is a one-shot job. Its `0`/`1`/`2` exit code is the monitoring result;
+it is not a daemon or a scheduler. For example, a host cron can launch a fresh
+cycle each minute:
+
+```cron
+* * * * * cd /srv/watchdog && /usr/bin/docker compose -f docker-compose.example.yml run --rm --no-deps watchdog
+```
+
+The container's `HEALTHCHECK` runs Watchdog's read-only `validate` command. It
+checks the mounted configuration and required runtime dependencies, not the
+monitored services. Consume the scheduled run's exit code plus Watchdog alerts,
+metrics, and `status` output for service health. The entrypoint uses `exec`, so
+`docker stop` reaches Watchdog's normal signal cleanup.
+
+Secrets remain environment variables named by the configuration's `*_env`
+fields. Do not bake them into an image or compose file. A one-off run can use a
+protected Docker environment file:
+
+```bash
+docker run --rm \
+  --env-file /etc/watchdog/notification.env \
+  --volume "$PWD/config.yaml:/etc/watchdog/config.yaml:ro" \
+  --volume "$PWD/state:/var/lib/watchdog" \
+  ghcr.io/shellharbor/watchdog:<version> notify-test --channel all
+```
+
+For a future external scheduler or agent, the stable container interface is a
+mounted `/etc/watchdog/config.yaml` (or `WATCHDOG_CONFIG`), deliberate output
+mounts, secret environment variables, one command, and its exit status. No
+agent implementation is required for this contract.
+
+### Docker socket remediation is exceptional
+
+The `watchdog-docker-actions` service is inactive unless the
+`docker-actions` profile is selected. It uses the separately published
+`-docker` image because that image alone includes the Docker CLI. Set the host
+socket group ID explicitly before using it:
+
+```bash
+export WATCHDOG_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
+docker compose -f docker-compose.example.yml \
+  --profile docker-actions run --rm watchdog-docker-actions
+```
+
+Mounting `/var/run/docker.sock` gives the container control of the host Docker
+daemon and can permit host-level compromise. Use a dedicated reviewed config,
+least-privilege action policy, and a safer remote remediation path where
+possible. The default service deliberately never receives this access.
+
+### Image releases
+
+Published GitHub Releases build GHCR images for `linux/amd64` and `linux/arm64`.
+They receive full, minor, and major version aliases; `latest` is only moved by a
+non-prerelease. A manually selected tag must already contain this distribution.
+The Docker-enabled image uses the same aliases with a `-docker` suffix. OCI
+labels, provenance, and an SBOM are attached during publication.
+Docker Hub publication is optional and runs only when `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN` repository secrets are both configured; otherwise the GHCR
+job proceeds independently.
+
 ## Systemd deployment
 
 The installer provides `service-watchdog.service` and a one-minute
@@ -144,7 +240,7 @@ notifications. Use `notify-test`, whose outgoing content carries `[TEST]`.
 | Symptom | Likely cause and next step |
 | --- | --- |
 | Exit `2` before checks start | Run `validate`; correct the named YAML path, missing secret variable, unavailable optional tool, timezone, directory, dependency name, or action policy entry. |
-| No alert from a failed service | Confirm a transition actually occurred; repeated failure alerts are suppressed. Check enabled channels, environment variables, maintenance status, and the operational log. Use `notify-test`. |
+| No alert from a failed service | Confirm a transition actually occurred; repeated failure alerts are suppressed. Check enabled channels, the service's optional `notify.channels`, environment variables, maintenance status, and the operational log. Use `notify-test -s SERVICE` to see `not routed` channels. |
 | `status` says `unknown` | The service has no state file yet. Run one successful normal monitoring pass, then inspect again. |
 | Action never runs | Look for cooldown/backoff, maintenance, flapping, manual intervention, circuit-open, dependency failure, or a denied remediation policy. `status` exposes many of these blockers. |
 | A consumer is `dependency_failed` | Repair its required upstream service first. The downstream health check intentionally did not run. |

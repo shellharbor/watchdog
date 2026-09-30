@@ -5,10 +5,36 @@ failure notification is sent when a healthy/unknown service becomes
 unavailable; repeated unavailable checks do not flood recipients. A recovery
 notification follows when that service becomes healthy again.
 
-All notification channels are global. Enable one or more channels under
-`notifications`; each configured service uses them. Per-service message
-content is controlled by template variables such as `{{service}}` and
+Notification channels are configured globally under `notifications`. By
+default, every configured service uses every enabled channel. A service can
+opt into a smaller delivery set with `notify.channels`; message context can
+include `{{severity}}` and `{{runbook_url}}` as well as `{{service}}` and
 `{{detail}}`.
+
+## Per-service routing, severity, and runbooks
+
+```yaml
+services:
+  - name: payments-api
+    check: {type: http, url: https://payments.example.com/health}
+    notify:
+      channels: [telegram, pagerduty, opsgenie]
+      severity: critical
+      runbook_url: https://runbooks.example.com/payments-api
+```
+
+`channels` accepts `email`, `telegram`, `discord`, `slack`, `ntfy`,
+`pagerduty`, and `opsgenie`. It only filters channels already enabled at the
+top level; it never enables a provider by itself. Omit `channels` to retain
+the original all-enabled-channel behavior.
+
+Severity values are `info`, `warning`, `error`, and `critical`. They render as
+`{{severity}}`; PagerDuty receives the same value, while Opsgenie maps them to
+`P5`, `P3`, `P2`, and `P1`, respectively. A missing severity retains the
+legacy defaults: `error` for failure and `critical` for escalation. A
+recovery renders as `info`. A non-secret HTTP(S) `runbook_url` renders as `{{runbook_url}}` and is included
+in PagerDuty and Opsgenie trigger payloads. Do not put credentials or secret
+query parameters in the URL.
 
 ## Email via SMTP
 
@@ -142,6 +168,8 @@ The ordinary failure and recovery templates receive:
 - `{{service}}`, `{{event}}`, and `{{timestamp}}`
 - `{{check_type}}`, `{{detail}}`, `{{http_status}}`, and `{{check_exit}}`
 - `{{action_status}}`
+- `{{severity}}` and `{{runbook_url}}` from `services[].notify` (the runbook
+  value is empty when it is not configured)
 - incident values when available: `{{incident_id}}`,
   `{{incident_duration}}`, and related incident context
 
@@ -156,7 +184,7 @@ run remediation or hooks. It also ignores a maintenance window but warns when
 the selected service is currently in one.
 
 ```bash
-# Test all enabled channels with a synthetic failure for service api.
+# Test every channel eligible for service api with a synthetic failure.
 bash ./service-watchdog.sh notify-test -c ./config.yaml -s api
 
 # Test only Slack with recovery templates.
@@ -169,9 +197,11 @@ bash ./service-watchdog.sh notify-test -c ./config.yaml \
 ```
 
 Outgoing subjects and channel text include `[TEST]`. The terminal output is a
-`CHANNEL | RESULT | DETAIL` table. Exit `0` means every selected, enabled
-channel succeeded; `1` means at least one failed; `2` indicates invalid config
-or that no selected channel is enabled.
+`CHANNEL | RESULT | DETAIL` table. With `-s`, globally enabled channels not in
+the service's `notify.channels` appear as `skipped | not routed`. Exit `0`
+means every selected, eligible channel succeeded; `1` means at least one
+failed; `2` indicates invalid config or that no selected eligible channel is
+enabled.
 
 ## Remediation commands
 

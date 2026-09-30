@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+settings:
+  log_file: /var/log/service-watchdog/routing.log
+  lock_file: /run/lock/service-watchdog-routing.lock
+  state_directory: /var/lib/service-watchdog/routing
+
+# Configure credentials in a protected environment file. This example leaves
+# all providers disabled until the corresponding settings are completed.
+notifications:
+  email:
+    enabled: false
+  webhooks:
+    telegram:
+      enabled: false
+      bot_token_env: WATCHDOG_TG_BOT_TOKEN
+      chat_id: "-1001234567890"
+    pagerduty:
+      enabled: false
+      routing_key_env: WATCHDOG_PAGERDUTY_ROUTING_KEY
+    opsgenie:
+      enabled: false
+      api_key_env: WATCHDOG_OPSGENIE_API_KEY
+
+services:
+  - name: payments-api
+    check:
+      type: http
+      url: https://payments.example.com/health
+      success_status: [200]
+    notify:
+      # Only these globally enabled providers receive payments-api events.
+      channels: [telegram, pagerduty, opsgenie]
+      severity: critical
+      runbook_url: https://runbooks.example.com/payments-api

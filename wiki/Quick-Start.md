@@ -156,6 +156,7 @@ not pile up a queue of remediation attempts.
 
 ## Next steps
 
+- Run the same one-shot monitor with the [least-privilege Docker deployment](Deployment-and-Troubleshooting.md#docker-deployment).
 - Add [safe remediation and a cooldown](Notifications-and-Remediation.md).
 - Monitor [disk space, security events, or application dependencies](Checks-and-Security.md).
 - Configure [quiet maintenance windows and outage controls](Reliability-and-Dependencies.md).

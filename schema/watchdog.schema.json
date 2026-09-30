@@ -285,6 +285,30 @@
         }, "additionalProperties": false }
       }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["failure_threshold", "open_duration"] }, "additionalProperties": false
     },
+    "notificationRoute": {
+      "type": "object",
+      "description": "Optional per-service notification routing and operational context. When channels is omitted, every globally enabled channel remains eligible.",
+      "properties": {
+        "channels": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "enum": ["email", "telegram", "discord", "slack", "ntfy", "pagerduty", "opsgenie"] },
+          "description": "Globally enabled channels that may deliver this service's events. Omit to retain all enabled channels."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "error", "critical"],
+          "description": "Operational severity exposed as {{severity}} and mapped to PagerDuty severity and Opsgenie priority. Defaults to error, or critical for escalation."
+        },
+        "runbook_url": {
+          "type": "string",
+          "pattern": "^https?://\\S+$",
+          "description": "Non-secret HTTP(S) runbook URL exposed as {{runbook_url}} and included in PagerDuty and Opsgenie trigger payloads."
+        }
+      },
+      "additionalProperties": false
+    },
     "serviceFields": {
       "type": "object", "description": "Service fields; templates may provide any subset. Template name/template_mode/name entries are ignored by Bash when placed inside a template.",
       "properties": {
@@ -298,6 +322,7 @@
         "actions": { "$ref": "#/$defs/actions", "description": "Remediation commands, cooldown, verification and backoff." },
         "only_if": { "type": "array", "items": { "$ref": "#/$defs/onlyIf" }, "description": "Conditions that must pass before a check runs." },
         "flapping": { "$ref": "#/$defs/flapping", "description": "Flapping guard." },
+        "notify": { "$ref": "#/$defs/notificationRoute", "description": "Optional per-service notification routing, severity and runbook context." },
         "maintenance": { "$ref": "#/$defs/maintenance", "description": "Quiet windows for side effects." },
         "escalation": { "$ref": "#/$defs/escalation", "description": "Repeated-failure escalation." },
         "circuit_breaker": { "$ref": "#/$defs/circuitBreaker", "description": "Remediation circuit breaker." },

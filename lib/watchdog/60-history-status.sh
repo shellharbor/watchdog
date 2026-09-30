@@ -306,6 +306,10 @@ notify_test_run() {
             printf '%s | skipped | disabled\n' "$channel"
             continue
         fi
+        if ! service_notification_route_allows "$channel"; then
+            printf '%s | skipped | not routed\n' "$channel"
+            continue
+        fi
         enabled_count=$((enabled_count + 1))
         NOTIFY_TEST_DETAIL=''
         if [[ "$channel" == email ]]; then

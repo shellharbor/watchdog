@@ -1073,6 +1073,50 @@ build_dependency_graph() {
     done
 }
 
+validate_notification_route_configuration() {
+    local index="$1" route_type channels_type value_type value channel_count channel
+    local -A seen_channels=()
+
+    route_type="$(yaml_read ".services[$index].notify | type")"
+    [[ "$route_type" == '!!null' ]] && return 0
+    [[ "$route_type" == '!!map' ]] || die "services[$index].notify must be a YAML map."
+
+    value_type="$(yaml_read ".services[$index].notify.severity | type")"
+    if [[ "$value_type" != '!!null' ]]; then
+        validate_string ".services[$index].notify.severity" "services[$index].notify.severity"
+        value="$(yaml_read ".services[$index].notify.severity")"
+        case "$value" in info|warning|error|critical) ;; *)
+            die "services[$index].notify.severity must be info, warning, error, or critical."
+            ;;
+        esac
+    fi
+
+    value_type="$(yaml_read ".services[$index].notify.runbook_url | type")"
+    if [[ "$value_type" != '!!null' ]]; then
+        validate_string ".services[$index].notify.runbook_url" "services[$index].notify.runbook_url"
+        value="$(yaml_read ".services[$index].notify.runbook_url")"
+        [[ "$value" =~ ^https?://[^[:space:]]+$ ]] ||
+            die "services[$index].notify.runbook_url must be an HTTP(S) URL without spaces."
+    fi
+
+    channels_type="$(yaml_read ".services[$index].notify.channels | type")"
+    [[ "$channels_type" == '!!null' ]] && return 0
+    [[ "$channels_type" == '!!seq' ]] || die "services[$index].notify.channels must be a YAML array."
+    channel_count="$(yaml_read ".services[$index].notify.channels | length")"
+    (( channel_count > 0 )) || die "services[$index].notify.channels must not be empty."
+    for ((channel = 0; channel < channel_count; channel++)); do
+        validate_string ".services[$index].notify.channels[$channel]" "services[$index].notify.channels[$channel]"
+        value="$(yaml_read ".services[$index].notify.channels[$channel]")"
+        case "$value" in email|telegram|discord|slack|ntfy|pagerduty|opsgenie) ;; *)
+            die "services[$index].notify.channels[$channel] is not a supported notification channel."
+            ;;
+        esac
+        [[ -z "${seen_channels[$value]:-}" ]] ||
+            die "services[$index].notify.channels[$channel] duplicates ${value}."
+        seen_channels["$value"]=1
+    done
+}
+
 validate_threshold_source() {
     local expression="$1" description="$2" source_type value value_type index count item_type pattern_status
     [[ "$(yaml_read "${expression} | type")" == '!!map' ]] || die "${description} must be a map."
@@ -1419,6 +1463,7 @@ validate_configuration() {
         validate_maintenance_configuration "$index" "$name"
         validate_escalation_configuration "$index" "$name"
         validate_circuit_breaker_configuration "$index" "$name"
+        validate_notification_route_configuration "$index"
     done
 
     hooks_type="$(yaml_read '.hooks | type')"

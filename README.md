@@ -50,6 +50,7 @@ For task-oriented guides and additional runnable examples, see the
 - Failure and recovery hooks with environment variables
 - Built-in SMTP email alerts with YAML-configured templates and recipients
 - Telegram, Discord, Slack, ntfy, PagerDuty, and Opsgenie alerts
+- Per-service notification routing, severity, and runbook context
 - Persistent state and transition-only hooks
 - Global non-blocking lock to prevent overlapping runs
 - In-memory YAML lookup cache to avoid repeated parser processes during each run
@@ -114,6 +115,138 @@ sudo /opt/service-watchdog/service-watchdog.sh
 Or run `sudo ./install.sh` to verify dependencies, install the script and
 example configuration, create runtime directories, install the systemd units,
 and reload systemd. The installer preserves an existing configuration.
+
+## Run Watchdog in Docker
+
+Docker is an additional deployment option, not a replacement for the native
+single-file, cron, or systemd installation. The production image is built from
+[`packaging/docker/Dockerfile`](packaging/docker/Dockerfile); the root
+[`Dockerfile`](Dockerfile) belongs only to the GitHub Marketplace validation
+Action described below.
+
+Release images are published to GitHub Container Registry as
+`ghcr.io/shellharbor/watchdog`. Pin a complete release tag in production:
+
+```bash
+docker pull ghcr.io/shellharbor/watchdog:<version>
+docker build --file packaging/docker/Dockerfile --target runtime \
+  --tag watchdog:local .
+```
+
+The container is a one-shot job. Its exit code is the monitoring result: `0`
+means the selected targets were healthy, `1` represents an unavailable target
+or attempted remediation, and `2` is a Watchdog configuration or runtime
+error. It does not run a scheduler or background daemon. Schedule
+`docker compose run --rm watchdog` with the host scheduler if a container-only
+deployment is desired.
+
+Start with the supplied configuration and Compose files:
+
+```bash
+cp packaging/docker/config.example.yaml config.yaml
+mkdir -p state
+# On a Linux host, give the non-root image user write access to persisted data.
+sudo chown -R 10001:10001 state
+
+# Replace the illustrative URL in config.yaml, then validate without checks.
+docker compose -f docker-compose.example.yml run --rm watchdog validate
+
+# Run one monitoring cycle.
+docker compose -f docker-compose.example.yml run --rm watchdog
+```
+
+The Compose example mounts only a read-only configuration file and a writable
+`./state` volume. Its example configuration keeps state and the operational log
+under `/var/lib/watchdog`; enable history, metrics, or a generated status page
+only on paths mounted deliberately for those outputs. The container root
+filesystem is read-only, it runs as UID/GID `10001`, drops all Linux
+capabilities, uses `no-new-privileges`, and has a small writable `/tmp` tmpfs.
+It does not use privileged mode, host networking, host filesystem mounts, or a
+Docker socket by default.
+
+Container checks observe the container network and only the filesystems that
+you mount. In particular, a disk check does not report host disk capacity
+unless the relevant host filesystem is explicitly mounted read-only, and a
+`127.0.0.1` target means the Watchdog container itself—not the host. Host
+`systemctl` commands are unavailable; Docker CLI remediation requires the
+separate socket profile below. A ClamAV check also needs a deliberate readable
+scan path and current virus definitions; they are not baked into the image.
+
+Keep notification credentials outside YAML and the image. For an ad-hoc run,
+use a protected environment file containing only the variables named by the
+configuration's `*_env` fields:
+
+```bash
+docker run --rm \
+  --env-file /etc/watchdog/notification.env \
+  --volume "$PWD/config.yaml:/etc/watchdog/config.yaml:ro" \
+  --volume "$PWD/state:/var/lib/watchdog" \
+  ghcr.io/shellharbor/watchdog:<version> notify-test --channel all
+```
+
+For Compose scheduling, add the same protected file through a local,
+uncommitted Compose override (`env_file:`), or inject those variables through
+the host scheduler's secret mechanism. Never pass a token or password as an
+image build argument, label, command argument, or committed YAML value.
+
+### Docker scheduling, health, and lifecycle
+
+A host cron entry can trigger the job every minute without keeping a monitor
+daemon alive:
+
+```cron
+* * * * * cd /srv/watchdog && /usr/bin/docker compose -f docker-compose.example.yml run --rm --no-deps watchdog
+```
+
+The image health check runs `validate` against the mounted configuration. It
+confirms that the Watchdog binary, configuration, and required dependencies are
+usable, but deliberately **does not** indicate whether the monitored services
+are healthy. Use the exit code from each scheduled run and Watchdog's alerts,
+metrics, and status command for target health.
+
+`ENTRYPOINT` forwards signals directly to the Watchdog process, so `docker
+stop` reaches its normal cleanup trap and retains Watchdog's exit-code contract.
+The container contract for a future external scheduler or agent is intentionally
+small: mount a readable config at `/etc/watchdog/config.yaml` (or set
+`WATCHDOG_CONFIG`), mount the required output paths, supply secrets as
+environment variables, invoke a single command, and consume its exit code.
+
+### Optional Docker remediation
+
+The default image intentionally does not include the Docker CLI and the default
+Compose service never mounts `/var/run/docker.sock`. If—and only if—configured
+remediation commands need to control the host Docker daemon, use the separate
+`-docker` image and explicit profile:
+
+```bash
+export WATCHDOG_DOCKER_GID="$(stat -c '%g' /var/run/docker.sock)"
+docker compose -f docker-compose.example.yml \
+  --profile docker-actions run --rm watchdog-docker-actions
+```
+
+Give that profile a dedicated, reviewed config such as `config-docker.yaml`.
+Docker socket access effectively grants control of the host Docker daemon and
+can lead to host-level compromise; it is not made safe by running the container
+as a non-root UID. Prefer remote HTTP remediation or narrowly scoped host
+automation when possible.
+
+### Image publication and tags
+
+The `Publish Watchdog container images` workflow runs for a published GitHub
+Release, or manually for an existing release tag that already contains this
+distribution after it verifies that the tag matches [`VERSION`](VERSION). It
+publishes multi-platform (`linux/amd64` and `linux/arm64`) images to GHCR with
+full, minor, and major semantic-version tags.
+`latest` (and `latest-docker`) is updated only for a release that GitHub does
+not mark as a prerelease. The Docker-enabled variant uses the same tags with a
+`-docker` suffix.
+
+The workflow adds OCI source/version/revision labels and attaches BuildKit
+provenance and an SBOM. Docker Hub is optional: set repository secrets
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` to publish the same tags under
+`docker.io/<username>/watchdog`; without both secrets its job is skipped while
+GHCR publication continues. Make the first GHCR package public in GitHub's
+package settings if it should be anonymously pullable.
 
 ## Validate configuration in GitHub Actions
 
@@ -834,7 +967,7 @@ as the request body with `Title: watchdog` and the configured priority.
 
 Supported variables are the same as email templates: `{{service}}`, `{{event}}`,
 `{{timestamp}}`, `{{check_type}}`, `{{detail}}`, `{{http_status}}`,
-`{{check_exit}}`, and `{{action_status}}`.
+`{{check_exit}}`, `{{action_status}}`, `{{severity}}`, and `{{runbook_url}}`.
 
 Run `service-watchdog.sh -n` after setting the relevant environment variables:
 dry-run validates enabled webhook configuration and that each configured secret
@@ -868,6 +1001,35 @@ Both credentials are read from the environment, stored only in private
 temporary curl files during delivery, and never logged. `notify-test` supports
 both provider names as `--channel pagerduty` and `--channel opsgenie`.
 See [`examples/oncall-notifications.yaml`](examples/oncall-notifications.yaml).
+
+#### Per-service notification routing, severity, and runbooks
+
+Channels remain globally configured, but a service can opt into a smaller
+delivery set with `notify.channels`. Omitting `notify.channels` preserves the
+original behavior: every globally enabled channel receives the service event.
+`severity` is available to email and webhook templates as `{{severity}}`; it
+also becomes the PagerDuty Events API severity and maps to Opsgenie priorities
+`critical` → `P1`, `error` → `P2`, `warning` → `P3`, and `info` → `P5`.
+Without an explicit severity, Watchdog retains its prior defaults of `error`
+for a failure and `critical` for an escalation; recovery template context is
+`info`.
+
+```yaml
+services:
+  - name: payments-api
+    check: {type: http, url: https://payments.example.com/health}
+    notify:
+      channels: [telegram, pagerduty, opsgenie]
+      severity: critical
+      runbook_url: https://runbooks.example.com/payments-api
+```
+
+`runbook_url` must be a non-secret HTTP(S) URL. It is available as
+`{{runbook_url}}` in templates and is included in PagerDuty and Opsgenie
+trigger payloads. Do not place credentials or secret query parameters in a
+runbook URL. See
+[`examples/notification-routing.yaml`](examples/notification-routing.yaml) for
+a complete configuration.
 
 ### Maintenance Windows
 
@@ -1391,8 +1553,10 @@ bash ./service-watchdog.sh notify-test -c ./config.yaml --channel telegram --eve
 
 The defaults are `--channel all` and `--event failure`; `escalation` is also
 supported. With `-s`, the selected service supplies its name and check type.
-Notification templates are currently global, not routed per service. Without
-`-s`, the synthetic name is `watchdog-test`. The message uses the detail
+With `-s`, its `notify.channels` routing is also applied; globally enabled but
+unrouted channels are reported as `skipped | not routed`. Without `-s`, the
+synthetic name is `watchdog-test` and all globally enabled channels remain
+eligible. The message uses the detail
 `This is a test notification from watchdog`, a `test-<unix>` incident ID,
 `n/a` for check status/exit, and `not-required` for action status. Subjects
 and message text start with `[TEST]`.

@@ -1,0 +1,20 @@
+# Keep both container build contexts small. The root Dockerfile is the GitHub
+# Action image; packaging/docker/Dockerfile is the production runtime image.
+.git
+.ai
+.codex
+.cursor
+.github
+.idea
+.vscode
+tests
+wiki
+examples
+*.md
+CHANGELOG.md
+config.example.yaml
+watchdog-discover.sh
+install.sh
+lib
+schema
+packaging/systemd

@@ -42,6 +42,10 @@ projects.
   Watchdog incident ID as their deduplication key/alias, trigger on failure or
   escalation, resolve only on recovery, and keep credentials and JSON payloads
   out of logs and curl argv.
+- `services[].notify` can narrow delivery to already globally enabled channels
+  and attach severity/runbook context. Omitting `channels` must preserve
+  all-enabled-channel delivery; severity maps directly to PagerDuty and to the
+  documented Opsgenie priority, and runbook URLs must remain non-secret.
 - `actions.http` is first-class remote remediation, not a shell escape hatch.
   It shares all ordinary remediation guards and in enforce mode must match an
   exact `security.remediation_policy.allowed_http` method/URL entry. Header and
@@ -51,6 +55,14 @@ projects.
   and exit with Watchdog's normal validation status. Keep its image dependencies
   sufficient for every optional check type and cover its valid and invalid
   behavior through `tests/github-action.sh --docker` in CI.
+- `packaging/docker/Dockerfile` is the production one-shot container image;
+  it is intentionally separate from the root Dockerfile used by `action.yml`.
+  Preserve its non-root UID/GID `10001`, default least-privilege contract, and
+  `WATCHDOG_CONFIG` mount interface. The image healthcheck runs only
+  `validate`, never target checks; target health remains the scheduled run's
+  exit status. Docker daemon access belongs only in the explicit `-docker`
+  image/profile and must never become a default mount, capability, privilege,
+  or network setting.
 - `status_page.uptime` is opt-in and requires `history.enabled: true`. It
   renders only sampled, observed availability from history: preserve grey
   intervals when no record exists and never present the bars as an SLA.
@@ -103,10 +115,12 @@ configuration/schema test and broader regression coverage:
 ```bash
 bash ./scripts/build-watchdog.sh --check
 bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh
-bash -n scripts/github-action-entrypoint.sh
-shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh scripts/github-action-entrypoint.sh tests/*.sh
+bash -n scripts/github-action-entrypoint.sh packaging/docker/*.sh
+shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh scripts/github-action-entrypoint.sh packaging/docker/*.sh tests/*.sh
 bash ./tests/versioning.sh
 bash ./tests/run-all.sh
+bash ./tests/docker-runtime.sh --docker
+bash ./tests/docker-runtime.sh --docker-socket
 ```
 
 `tests/run-all.sh` is the authoritative inventory and rejects unregistered test
@@ -115,8 +129,10 @@ the modules. `tests/schema.sh` requires Mike Farah `yq` v4 and Python's
 `jsonschema` package. CI installs ShellCheck, SQLite, yq, and jsonschema, then
 also compiles every Bash source with the official `bash:4.3.48` container to
 protect the documented compatibility floor; do not claim a check ran locally if
-its tool is unavailable. Tests isolate external programs with PATH shims and
-temporary directories—preserve that pattern.
+its tool is unavailable. CI builds the public Docker Action and the production
+runtime image, including the separately opt-in Docker socket test. Tests
+isolate external programs with PATH shims and temporary directories—preserve
+that pattern.
 
 ## Keep this skill current
 

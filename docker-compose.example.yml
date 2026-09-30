@@ -1,0 +1,44 @@
+# Copy packaging/docker/config.example.yaml to ./config.yaml and replace its
+# illustrative endpoint before running this one-shot job.
+services:
+  watchdog:
+    image: "${WATCHDOG_IMAGE:-ghcr.io/shellharbor/watchdog:latest}"
+    restart: "no"
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    environment:
+      WATCHDOG_CONFIG: /etc/watchdog/config.yaml
+    volumes:
+      - ./config.yaml:/etc/watchdog/config.yaml:ro
+      - ./state:/var/lib/watchdog
+
+  # This profile is intentionally separate. It is only for configurations that
+  # run Docker CLI remediation commands. Socket access controls the host daemon.
+  watchdog-docker-actions:
+    profiles: [docker-actions]
+    image: "${WATCHDOG_DOCKER_IMAGE:-ghcr.io/shellharbor/watchdog:latest-docker}"
+    restart: "no"
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    environment:
+      WATCHDOG_CONFIG: /etc/watchdog/config.yaml
+    group_add:
+      # A non-privileged fallback keeps the profile inert until an operator
+      # explicitly supplies the host socket group ID.
+      - "${WATCHDOG_DOCKER_GID:-65534}"
+    volumes:
+      - ./config-docker.yaml:/etc/watchdog/config.yaml:ro
+      - ./state:/var/lib/watchdog
+      - /var/run/docker.sock:/var/run/docker.sock

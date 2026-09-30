@@ -405,6 +405,14 @@ services:
       recovery_seconds: 120
       notify: true
 
+    # Restrict this service to selected globally enabled channels. Omit
+    # channels to retain delivery through every enabled channel. severity and
+    # runbook_url can be rendered in templates and enrich on-call alerts.
+    notify:
+      channels: [email, pagerduty, opsgenie]
+      severity: critical
+      runbook_url: https://runbooks.example.com/example-website
+
     # Checks continue during these periods, while remediation, email, webhooks,
     # and hooks are suppressed. Windows must start and end on the same day.
     maintenance:

@@ -204,10 +204,12 @@ render_email_template() {
     local template="$1"
     local event="$2"
     local timestamp="$3"
-    local detail node_id
+    local detail node_id severity runbook_url
     detail="$(sanitize_detail "$CHECK_DETAIL")"
     node_id="$(yaml_read '.federation.node_id // ""')"
     [[ -n "$node_id" ]] || node_id="$(hostname -s)"
+    severity="$(notification_severity "$event")"
+    runbook_url="$(notification_runbook_url)"
 
     template="${template//\{\{service\}\}/$CURRENT_SERVICE}"
     template="${template//\{\{event\}\}/$event}"
@@ -227,6 +229,8 @@ render_email_template() {
     template="${template//\{\{incident_id\}\}/$INCIDENT_ID}"
     template="${template//\{\{incident_duration_seconds\}\}/$INCIDENT_DURATION}"
     template="${template//\{\{remediation_result\}\}/$INCIDENT_REMEDIATION_RESULT}"
+    template="${template//\{\{severity\}\}/$severity}"
+    template="${template//\{\{runbook_url\}\}/$runbook_url}"
     printf '%s' "$template"
 }
 
@@ -253,7 +257,7 @@ escape_json() {
 
 render_webhook_template() {
     local format="$1" template="$2" event="$3" timestamp="$4"
-    local service detail check_type http_status check_exit action_status consecutive_unavailable escalation_count node_id match_count threshold comparator since
+    local service detail check_type http_status check_exit action_status consecutive_unavailable escalation_count node_id match_count threshold comparator since severity runbook_url
 
     service="$CURRENT_SERVICE"
     detail="$(sanitize_detail "$CHECK_DETAIL")"
@@ -269,6 +273,8 @@ render_webhook_template() {
     threshold="${THRESHOLD_VALUE:-n/a}"
     comparator="${THRESHOLD_COMPARATOR:-n/a}"
     since="${THRESHOLD_SINCE:-n/a}"
+    severity="$(notification_severity "$event")"
+    runbook_url="$(notification_runbook_url)"
     case "$format" in
         html)
             service="$(escape_html "$service")"; detail="$(escape_html "$detail")"
@@ -276,6 +282,7 @@ render_webhook_template() {
             check_exit="$(escape_html "$check_exit")"; action_status="$(escape_html "$action_status")"
             node_id="$(escape_html "$node_id")"; match_count="$(escape_html "$match_count")"
             threshold="$(escape_html "$threshold")"; comparator="$(escape_html "$comparator")"; since="$(escape_html "$since")"
+            severity="$(escape_html "$severity")"; runbook_url="$(escape_html "$runbook_url")"
             ;;
         json)
             service="$(escape_json "$service")"; detail="$(escape_json "$detail")"
@@ -283,6 +290,7 @@ render_webhook_template() {
             check_exit="$(escape_json "$check_exit")"; action_status="$(escape_json "$action_status")"
             node_id="$(escape_json "$node_id")"; match_count="$(escape_json "$match_count")"
             threshold="$(escape_json "$threshold")"; comparator="$(escape_json "$comparator")"; since="$(escape_json "$since")"
+            severity="$(escape_json "$severity")"; runbook_url="$(escape_json "$runbook_url")"
             ;;
     esac
     template="${template//\{\{service\}\}/$service}"
@@ -303,6 +311,8 @@ render_webhook_template() {
     template="${template//\{\{incident_id\}\}/$INCIDENT_ID}"
     template="${template//\{\{incident_duration_seconds\}\}/$INCIDENT_DURATION}"
     template="${template//\{\{remediation_result\}\}/$INCIDENT_REMEDIATION_RESULT}"
+    template="${template//\{\{severity\}\}/$severity}"
+    template="${template//\{\{runbook_url\}\}/$runbook_url}"
     printf '%s' "$template"
 }
 
@@ -357,9 +367,60 @@ oncall_provider_handles_event() {
     case "$1" in failure|recovery|escalation) return 0 ;; *) return 1 ;; esac
 }
 
+service_notification_route_allows() {
+    local channel="$1" index channels_type channel_count item
+
+    index="${SERVICE_INDEX[$CURRENT_SERVICE]:-}"
+    [[ -n "$index" ]] || return 0
+    channels_type="$(yaml_read ".services[$index].notify.channels | type")"
+    [[ "$channels_type" == '!!null' ]] && return 0
+    channel_count="$(yaml_read ".services[$index].notify.channels | length")"
+    for ((item = 0; item < channel_count; item++)); do
+        [[ "$(yaml_read ".services[$index].notify.channels[$item]")" == "$channel" ]] && return 0
+    done
+    return 1
+}
+
+notification_severity() {
+    local event="$1" index severity_type severity
+
+    index="${SERVICE_INDEX[$CURRENT_SERVICE]:-}"
+    if [[ -n "$index" ]]; then
+        severity_type="$(yaml_read ".services[$index].notify.severity | type")"
+        if [[ "$severity_type" != '!!null' ]]; then
+            severity="$(yaml_read ".services[$index].notify.severity")"
+            printf '%s' "$severity"
+            return
+        fi
+    fi
+    case "$event" in
+        escalation) printf 'critical' ;;
+        recovery) printf 'info' ;;
+        *) printf 'error' ;;
+    esac
+}
+
+notification_runbook_url() {
+    local index
+
+    index="${SERVICE_INDEX[$CURRENT_SERVICE]:-}"
+    [[ -n "$index" ]] || return 0
+    yaml_read ".services[$index].notify.runbook_url // \"\""
+}
+
+opsgenie_priority_for_event() {
+    case "$(notification_severity "$1")" in
+        critical) printf 'P1' ;;
+        error) printf 'P2' ;;
+        warning) printf 'P3' ;;
+        info) printf 'P5' ;;
+    esac
+}
+
 send_single_webhook() {
     local webhook="$1" event="$2" env_name="" secret="" url="" template text timestamp
     local response_file response http_status curl_status thread_id priority error_file error_text payload_file='' secret_config=''
+    local severity runbook_url payload_details
     local -a curl_command
 
     case "$webhook" in
@@ -431,18 +492,22 @@ send_single_webhook() {
             text="$(render_webhook_template plain "$template" "$event" "$timestamp")"
             (( NOTIFY_TEST_MODE == 0 )) || text="[TEST] ${text}"
             url='https://events.pagerduty.com/v2/enqueue'
+            severity="$(notification_severity "$event")"
+            runbook_url="$(notification_runbook_url)"
+            payload_details=''
+            [[ -z "$runbook_url" ]] || payload_details="$(printf ',\"custom_details\":{\"runbook_url\":\"%s\"}' "$(escape_json "$runbook_url")")"
             case "$event" in
                 recovery)
                     text="$(printf '{"routing_key":"%s","event_action":"resolve","dedup_key":"%s"}' \
                         "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")")"
                     ;;
                 escalation)
-                    text="$(printf '{"routing_key":"%s","event_action":"trigger","dedup_key":"%s","payload":{"summary":"%s","source":"%s","severity":"critical"}}' \
-                        "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")" "$(escape_json "$CURRENT_SERVICE")")"
+                    text="$(printf '{"routing_key":"%s","event_action":"trigger","dedup_key":"%s","payload":{"summary":"%s","source":"%s","severity":"%s"%s}}' \
+                        "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")" "$(escape_json "$CURRENT_SERVICE")" "$severity" "$payload_details")"
                     ;;
                 *)
-                    text="$(printf '{"routing_key":"%s","event_action":"trigger","dedup_key":"%s","payload":{"summary":"%s","source":"%s","severity":"error"}}' \
-                        "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")" "$(escape_json "$CURRENT_SERVICE")")"
+                    text="$(printf '{"routing_key":"%s","event_action":"trigger","dedup_key":"%s","payload":{"summary":"%s","source":"%s","severity":"%s"%s}}' \
+                        "$(escape_json "$secret")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")" "$(escape_json "$CURRENT_SERVICE")" "$severity" "$payload_details")"
                     ;;
             esac
             payload_file="$(mktemp "${TEMP_DIRECTORY}/pagerduty-payload.XXXXXX")" || {
@@ -465,18 +530,22 @@ send_single_webhook() {
             else
                 url='https://api.opsgenie.com/v2/alerts'
             fi
+            priority="$(opsgenie_priority_for_event "$event")"
+            runbook_url="$(notification_runbook_url)"
+            payload_details=''
+            [[ -z "$runbook_url" ]] || payload_details="$(printf ',\"details\":{\"runbook_url\":\"%s\"}' "$(escape_json "$runbook_url")")"
             case "$event" in
                 recovery)
                     url+="/$(oncall_incident_key)/close?identifierType=alias"
                     text="$(printf '{"source":"watchdog","note":"%s"}' "$(escape_json "$text")")"
                     ;;
                 escalation)
-                    text="$(printf '{"message":"%s","alias":"%s","description":"%s","priority":"P1","source":"watchdog"}' \
-                        "$(escape_json "${text:0:130}")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")")"
+                    text="$(printf '{"message":"%s","alias":"%s","description":"%s","priority":"%s","source":"watchdog"%s}' \
+                        "$(escape_json "${text:0:130}")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")" "$priority" "$payload_details")"
                     ;;
                 *)
-                    text="$(printf '{"message":"%s","alias":"%s","description":"%s","priority":"P2","source":"watchdog"}' \
-                        "$(escape_json "${text:0:130}")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")")"
+                    text="$(printf '{"message":"%s","alias":"%s","description":"%s","priority":"%s","source":"watchdog"%s}' \
+                        "$(escape_json "${text:0:130}")" "$(escape_json "$(oncall_incident_key)")" "$(escape_json "$text")" "$priority" "$payload_details")"
                     ;;
             esac
             payload_file="$(mktemp "${TEMP_DIRECTORY}/opsgenie-payload.XXXXXX")" || {
@@ -541,6 +610,7 @@ send_webhook_notification() {
     for webhook in telegram discord slack ntfy pagerduty opsgenie; do
         enabled="$(yaml_read ".notifications.webhooks.${webhook}.enabled // false")"
         [[ "$enabled" == true ]] || continue
+        service_notification_route_allows "$webhook" || continue
         oncall_provider_handles_event "$event" || [[ "$webhook" != pagerduty && "$webhook" != opsgenie ]] || continue
         send_single_webhook "$webhook" "$event" || failed=1
     done
@@ -549,9 +619,12 @@ send_webhook_notification() {
 
 log_notification_plan() {
     local service_name="$1" event="$2" webhook
-    (( EMAIL_ENABLED == 0 )) || log INFO "service=${service_name} action=email result=would-send event=${event}"
+    if (( EMAIL_ENABLED == 1 )) && service_notification_route_allows email; then
+        log INFO "service=${service_name} action=email result=would-send event=${event}"
+    fi
     for webhook in telegram discord slack ntfy pagerduty opsgenie; do
         if [[ "$(yaml_read ".notifications.webhooks.${webhook}.enabled // false")" == true ]]; then
+            service_notification_route_allows "$webhook" || continue
             oncall_provider_handles_event "$event" || [[ "$webhook" != pagerduty && "$webhook" != opsgenie ]] || continue
             log INFO "service=${service_name} action=webhook result=would-send provider=${webhook} event=${event}"
         fi
@@ -646,6 +719,7 @@ send_email_notification() {
     local timestamp subject_template body_template subject body
 
     (( EMAIL_ENABLED == 1 )) || return 0
+    service_notification_route_allows email || return 0
     case "$event" in
         failure)
             subject_template="$EMAIL_FAILURE_SUBJECT"

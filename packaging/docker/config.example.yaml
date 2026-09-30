@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+# Copy to config.yaml, replace the endpoint, and mount it at /etc/watchdog/config.yaml.
+settings:
+  # Keep logs and state in the mounted /var/lib/watchdog volume.
+  log_file: /var/lib/watchdog/watchdog.log
+  # /tmp is a per-run writable tmpfs in the supplied Compose example.
+  lock_file: /tmp/watchdog.lock
+  state_directory: /var/lib/watchdog/state
+  default_timeout: 10
+  default_attempts: 2
+  default_retry_delay: 2
+
+services:
+  - name: api
+    check:
+      type: http
+      url: https://api.example.com/health
+      success_status: [200]
+      timeout: 10

@@ -13,6 +13,7 @@ readonly TEST_SCRIPTS=(
     dependencies.sh
     discovery.sh
     disk-space.sh
+    docker-runtime.sh
     email-notifications.sh
     escalation.sh
     federation.sh
@@ -21,6 +22,7 @@ readonly TEST_SCRIPTS=(
     history.sh
     maintenance.sh
     network-oncall-remediation.sh
+    notification-routing.sh
     notify-test.sh
     parallel.sh
     prometheus.sh

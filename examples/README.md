@@ -25,7 +25,9 @@ service names, and commands before enabling scheduled runs.
 | [`status-cli.yaml`](status-cli.yaml) | Read a service's persisted state with the terminal `status` command |
 | [`status-page-uptime.yaml`](status-page-uptime.yaml) | Publish a static status page with 30 days of observed-availability bars |
 | [`oncall-notifications.yaml`](oncall-notifications.yaml) | Open and resolve deduplicated PagerDuty and Opsgenie alerts |
+| [`notification-routing.yaml`](notification-routing.yaml) | Route a service to selected channels with severity and a runbook link |
 | [`remote-http-remediation.yaml`](remote-http-remediation.yaml) | Invoke an allowlisted remote API safely as remediation |
+| [`../docker-compose.example.yml`](../docker-compose.example.yml) | Run the non-root, one-shot production container with deliberate config and state mounts |
 
 Validate YAML and policy without running any checks or creating runtime state:
 

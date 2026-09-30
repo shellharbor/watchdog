@@ -7,6 +7,23 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- Per-service notification routing through `services[].notify.channels`, with
+  opt-in severity and runbook context for templates, PagerDuty, and Opsgenie.
+  Existing configurations continue to deliver through every globally enabled
+  channel when routing is omitted.
+- First-class production Docker distribution alongside native, cron, and
+  systemd deployment: a pinned, non-root runtime image, a separately tagged
+  Docker CLI variant, a least-privilege Compose example, and a container-aware
+  configuration template.
+- Release-driven multi-architecture (`linux/amd64`, `linux/arm64`) publication
+  to GHCR, optional Docker Hub publication when repository credentials exist,
+  semantic image tags, OCI metadata, BuildKit provenance, and SBOMs.
+- Docker runtime regression coverage for a read-only/non-root healthy cycle,
+  invalid configuration exit status, configuration-only healthcheck, graceful
+  signal handling, and the separately opt-in Docker socket image.
+
 ## [1.7.2] - 2026-09-26
 
 ### Added
