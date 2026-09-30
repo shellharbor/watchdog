@@ -73,6 +73,34 @@
       ],
       "additionalProperties": false
     },
+    "httpTlsTransport": {
+      "type": "object",
+      "description": "Optional private CA and client certificate files for an HTTP(S) check. TLS hostname and certificate verification remain enabled.",
+      "properties": {
+        "ca_cert_file": { "$ref": "#/$defs/absolutePath", "description": "Absolute path to a PEM CA bundle used instead of the system trust store for this HTTP check." },
+        "client_cert_file": { "$ref": "#/$defs/absolutePath", "description": "Absolute path to the PEM client certificate used for mutual TLS." },
+        "client_key_file": { "$ref": "#/$defs/absolutePath", "description": "Absolute path to the PEM private key paired with client_cert_file. Keep it readable only by the Watchdog account." }
+      },
+      "allOf": [
+        { "if": { "required": ["client_cert_file"] }, "then": { "required": ["client_key_file"] } },
+        { "if": { "required": ["client_key_file"] }, "then": { "required": ["client_cert_file"] } }
+      ],
+      "additionalProperties": false
+    },
+    "httpProxy": {
+      "type": "object",
+      "description": "Optional HTTP(S) proxy for an HTTP check. Proxy credentials are read only from environment variables.",
+      "properties": {
+        "url": { "type": "string", "pattern": "^https?://[^@\\s]+$", "description": "HTTP(S) proxy URL without embedded credentials." },
+        "username_env": { "$ref": "#/$defs/envName", "description": "Environment variable containing the proxy username." },
+        "password_env": { "$ref": "#/$defs/envName", "description": "Environment variable containing the proxy password; its value is never logged or passed in curl argv." }
+      },
+      "allOf": [
+        { "if": { "required": ["username_env"] }, "then": { "required": ["password_env"] } },
+        { "if": { "required": ["password_env"] }, "then": { "required": ["username_env"] } }
+      ],
+      "additionalProperties": false
+    },
     "jsonAssertionPath": {
       "type": "string",
       "pattern": "^\\$(?:\\.[A-Za-z_][A-Za-z0-9_]*|\\[[0-9]+\\])*$",
@@ -113,6 +141,8 @@
         "follow_redirects": { "type": "boolean", "default": true, "description": "Follow HTTP redirects." },
         "success_status": { "type": "array", "minItems": 1, "items": { "oneOf": [{ "type": "integer", "minimum": 100, "maximum": 599 }, { "type": "string", "pattern": "^[1-5][0-9]{2}$" }] }, "description": "Accepted HTTP status codes; defaults to the 2xx range." },
         "headers": { "type": "array", "items": { "$ref": "#/$defs/httpHeader" }, "description": "Additional HTTP request headers. Use value_env for secrets." },
+        "proxy": { "$ref": "#/$defs/httpProxy", "description": "Optional HTTP(S) proxy for an HTTP health check." },
+        "tls": { "$ref": "#/$defs/httpTlsTransport", "description": "Optional private CA and client certificate files for an HTTP(S) health check." },
         "expect": { "$ref": "#/$defs/httpExpect", "description": "Optional HTTP response assertions and latency SLO." },
         "host": { "type": "string", "minLength": 1, "pattern": "^\\S+$", "description": "TCP or TLS host name or address." },
         "port": { "$ref": "#/$defs/port", "description": "TCP destination port, or TLS port (defaults to 443 for tls_cert)." },
@@ -164,6 +194,8 @@
         { "$ref": "#/$defs/checkFields" },
         { "required": ["type"] },
         { "if": { "properties": { "type": { "const": "http" } }, "required": ["type"] }, "then": { "required": ["url"] } },
+        { "if": { "properties": { "type": { "const": "http" } }, "required": ["type", "proxy"] }, "then": { "properties": { "proxy": { "required": ["url"] } } } },
+        { "if": { "properties": { "type": { "not": { "const": "http" } } }, "required": ["type"] }, "then": { "not": { "anyOf": [{ "required": ["proxy"] }, { "required": ["tls"] }] } } },
         { "if": { "properties": { "type": { "const": "tcp" } }, "required": ["type"] }, "then": { "required": ["host", "port"] } },
         { "if": { "properties": { "type": { "const": "dns" } }, "required": ["type"] }, "then": { "required": ["name"] } },
         { "if": { "properties": { "type": { "const": "ping" } }, "required": ["type"] }, "then": { "required": ["host"] } },

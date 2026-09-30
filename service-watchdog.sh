@@ -1691,6 +1691,7 @@ validate_check_definition() {
             [[ "$value" == GET || "$value" == HEAD ]] || die "${description}.method must be GET or HEAD."
             value="$(yaml_read_true_default "${expression}.follow_redirects")"
             [[ "$value" == true || "$value" == false ]] || die "${description}.follow_redirects must be true or false."
+            validate_http_transport "${expression}" "${description}"
             value_type="$(yaml_read "${expression}.success_status | type")"
             if [[ "$value_type" != '!!null' ]]; then
                 [[ "$value_type" == '!!seq' ]] || die "${description}.success_status must be an array."
@@ -1924,6 +1925,13 @@ validate_check_definition() {
             is_positive_integer "$value" || die "${description}.${field} must be a positive integer."
         fi
     done
+
+    if [[ "$check_type" != http ]]; then
+        for field in proxy tls; do
+            value_type="$(yaml_read "${expression}.${field} | type")"
+            [[ "$value_type" == '!!null' ]] || die "${description}.${field} is supported only by HTTP checks."
+        done
+    fi
 }
 
 validate_configuration() {
@@ -2215,6 +2223,53 @@ log_configured_sequence_plan() {
         (( ${#planned_command[@]} > 0 )) || continue
         formatted="$(format_command planned_command)"
         log INFO "service=${service_name} action=${label}-command index=${command_index} result=would-run command=${formatted}"
+    done
+}
+validate_http_transport() {
+    local expression="$1" description="$2" value value_type field cert_type key_type
+    local username_type password_type
+
+    value_type="$(yaml_read "${expression}.tls | type")"
+    if [[ "$value_type" != '!!null' ]]; then
+        [[ "$value_type" == '!!map' ]] || die "${description}.tls must be a map."
+        cert_type="$(yaml_read "${expression}.tls.client_cert_file | type")"
+        key_type="$(yaml_read "${expression}.tls.client_key_file | type")"
+        [[ "$cert_type" == '!!null' && "$key_type" == '!!null' ]] ||
+            [[ "$cert_type" != '!!null' && "$key_type" != '!!null' ]] ||
+            die "${description}.tls.client_cert_file and ${description}.tls.client_key_file must be set together."
+        for field in ca_cert_file client_cert_file client_key_file; do
+            value_type="$(yaml_read "${expression}.tls.${field} | type")"
+            [[ "$value_type" == '!!null' ]] && continue
+            validate_string "${expression}.tls.${field}" "${description}.tls.${field}"
+            value="$(yaml_read "${expression}.tls.${field}")"
+            [[ "$value" == /* ]] || die "${description}.tls.${field} must be an absolute path."
+            [[ -f "$value" && -r "$value" ]] || die "${description}.tls.${field} must be a readable regular file."
+        done
+    fi
+
+    value_type="$(yaml_read "${expression}.proxy | type")"
+    [[ "$value_type" == '!!null' ]] && return 0
+    [[ "$value_type" == '!!map' ]] || die "${description}.proxy must be a map."
+    validate_string "${expression}.proxy.url" "${description}.proxy.url"
+    value="$(yaml_read "${expression}.proxy.url")"
+    [[ "$value" =~ ^https?://[^@[:space:]]+$ ]] ||
+        die "${description}.proxy.url must be an HTTP(S) URL without credentials or spaces."
+
+    username_type="$(yaml_read "${expression}.proxy.username_env | type")"
+    password_type="$(yaml_read "${expression}.proxy.password_env | type")"
+    [[ "$username_type" == '!!null' || "$username_type" == '!!str' ]] ||
+        die "${description}.proxy.username_env must be a string."
+    [[ "$password_type" == '!!null' || "$password_type" == '!!str' ]] ||
+        die "${description}.proxy.password_env must be a string."
+    [[ "$username_type" == '!!null' && "$password_type" == '!!null' ]] ||
+        [[ "$username_type" != '!!null' && "$password_type" != '!!null' ]] ||
+        die "${description}.proxy.username_env and ${description}.proxy.password_env must be set together."
+    for field in username_env password_env; do
+        value_type="$(yaml_read "${expression}.proxy.${field} | type")"
+        [[ "$value_type" == '!!null' ]] && continue
+        validate_string "${expression}.proxy.${field}" "${description}.proxy.${field}"
+        value="$(yaml_read "${expression}.proxy.${field}")"
+        [[ "$value" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "${description}.proxy.${field} is not a valid environment variable name."
     done
 }
 sanitize_detail() {
@@ -3013,9 +3068,10 @@ json_assertion_path_to_yq() {
 
 check_http() {
     local index="$1"
-    local url method follow_redirects timeout_value error_file body_file="" http_status content_type time_total curl_status error_output
+    local url method follow_redirects timeout_value error_file body_file="" curl_config="" http_status content_type time_total curl_status error_output
     local header_count header_index header_name header_value header_value_env expected_content_type body_regex max_total_ms curl_output
     local json_assertion_count json_assertion_index json_path yq_path equals_type expected_json actual_json actual_type actual_value
+    local ca_cert_file client_cert_file client_key_file proxy_url proxy_username_env proxy_password_env proxy_username proxy_password
     local -a curl_command
     url="$(yaml_read "${CHECK_CONFIG_PATH}.url")"
     method="$(yaml_read "${CHECK_CONFIG_PATH}.method // \"GET\"")"
@@ -3060,6 +3116,49 @@ check_http() {
         curl_command+=(--header "${header_name}: ${header_value}")
     done
     [[ "$follow_redirects" == "true" ]] && curl_command+=(--location --max-redirs 5)
+    ca_cert_file="$(yaml_read "${CHECK_CONFIG_PATH}.tls.ca_cert_file // \"\"")"
+    client_cert_file="$(yaml_read "${CHECK_CONFIG_PATH}.tls.client_cert_file // \"\"")"
+    client_key_file="$(yaml_read "${CHECK_CONFIG_PATH}.tls.client_key_file // \"\"")"
+    [[ -z "$ca_cert_file" ]] || curl_command+=(--cacert "$ca_cert_file")
+    [[ -z "$client_cert_file" ]] || curl_command+=(--cert "$client_cert_file")
+    [[ -z "$client_key_file" ]] || curl_command+=(--key "$client_key_file")
+
+    proxy_url="$(yaml_read "${CHECK_CONFIG_PATH}.proxy.url // \"\"")"
+    if [[ -n "$proxy_url" ]]; then
+        curl_command+=(--proxy "$proxy_url")
+        proxy_username_env="$(yaml_read "${CHECK_CONFIG_PATH}.proxy.username_env // \"\"")"
+        proxy_password_env="$(yaml_read "${CHECK_CONFIG_PATH}.proxy.password_env // \"\"")"
+        if [[ -n "$proxy_username_env" ]]; then
+            proxy_username="${!proxy_username_env:-}"
+            proxy_password="${!proxy_password_env:-}"
+            if [[ -z "$proxy_username" || -z "$proxy_password" ]]; then
+                [[ -z "$body_file" ]] || rm -f -- "$body_file"
+                CHECK_EXIT_CODE=2
+                if [[ -z "$proxy_username" ]]; then
+                    CHECK_DETAIL="missing HTTP proxy environment variable ${proxy_username_env}"
+                else
+                    CHECK_DETAIL="missing HTTP proxy environment variable ${proxy_password_env}"
+                fi
+                return 1
+            fi
+            if [[ "$proxy_username" == *$'\r'* || "$proxy_username" == *$'\n'* || "$proxy_password" == *$'\r'* || "$proxy_password" == *$'\n'* ]]; then
+                [[ -z "$body_file" ]] || rm -f -- "$body_file"
+                CHECK_EXIT_CODE=2
+                CHECK_DETAIL='HTTP proxy credentials contain a newline'
+                return 1
+            fi
+            curl_config="$(mktemp "${TEMP_DIRECTORY}/http-${index}-proxy.XXXXXX")" || {
+                [[ -z "$body_file" ]] || rm -f -- "$body_file"
+                CHECK_EXIT_CODE=2; CHECK_DETAIL='cannot create HTTP proxy credentials temporary file'; return 1;
+            }
+            if ! chmod 0600 "$curl_config" ||
+                ! printf 'proxy-user = "%s"\n' "$(escape_curl_config_value "${proxy_username}:${proxy_password}")" >"$curl_config"; then
+                rm -f -- "$curl_config" "$body_file"
+                CHECK_EXIT_CODE=2; CHECK_DETAIL='cannot write HTTP proxy credentials temporary file'; return 1;
+            fi
+            curl_command+=(--config "$curl_config")
+        fi
+    fi
     curl_command+=("$url")
 
     if [[ -n "$body_file" ]]; then
@@ -3070,7 +3169,7 @@ check_http() {
     curl_status=$?
     error_output=""
     [[ -s "$error_file" ]] && error_output="$(sanitize_detail "$(<"$error_file")")"
-    rm -f -- "$error_file"
+    rm -f -- "$error_file" "$curl_config"
 
     IFS=$'\t' read -r http_status content_type time_total <<<"$curl_output"
     CHECK_HTTP_STATUS="$http_status"

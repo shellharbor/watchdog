@@ -7,6 +7,15 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.7.6] - 2026-09-30
+
+### Added
+
+- Opt-in HTTP transport settings for private CA trust, mutual TLS client
+  certificates, and authenticated HTTP(S) proxies. Proxy credentials are read
+  only from paired environment variables and are written only to a temporary
+  mode-`0600` curl configuration file.
+
 ## [1.7.5] - 2026-09-30
 
 ### Added
@@ -250,7 +259,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Quick Start now uses the stable `v1.0.3` source archive.
 - Expanded repository ignore rules and troubleshooting documentation.
 
-[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.7.5...HEAD
+[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.7.6...HEAD
+[1.7.6]: https://github.com/shellharbor/watchdog/compare/v1.7.5...v1.7.6
 [1.7.5]: https://github.com/shellharbor/watchdog/compare/v1.7.4...v1.7.5
 [1.4.0]: https://github.com/shellharbor/watchdog/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/shellharbor/watchdog/compare/v1.2.0...v1.3.0

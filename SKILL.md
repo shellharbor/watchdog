@@ -35,6 +35,13 @@ projects.
   exactly one typed scalar `equals` or string-only ERE `regex` per assertion.
   Parse the existing 64 KiB private response capture as JSON, fail missing or
   null paths, and never include a response body or asserted value in details.
+- HTTP `tls` and `proxy` maps are opt-in transport configuration for ordinary
+  HTTP and liveness/readiness checks. Preserve default curl verification; use
+  absolute readable PEM files, require client certificate/key pairs, and reject
+  proxy URLs with embedded credentials. Do not add encrypted-key passphrase
+  support that could expose a secret in argv. Proxy username/password must be paired
+  `*_env` fields and must reach curl only through a private mode-`0600` config
+  file—never argv, logs, state, history, metrics, or status-page output.
 - `tls_cert` is an optional OpenSSL-backed leaf-certificate expiry check. It
   must verify `openssl` only when enabled, pass host and SNI as separate argv
   values, and expose expiry context without logging or persisting certificate

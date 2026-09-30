@@ -8,6 +8,7 @@ readonly DEFAULT_OUTPUT="${PROJECT_DIRECTORY}/service-watchdog.sh"
 readonly MODULES=(
     00-bootstrap.sh
     10-configuration.sh
+    15-http-transport-validation.sh
     20-notifications.sh
     30-checks.sh
     40-state-federation.sh

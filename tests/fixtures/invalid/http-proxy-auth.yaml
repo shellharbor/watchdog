@@ -1,0 +1,12 @@
+settings:
+  log_file: /tmp/watchdog-schema-test.log
+  lock_file: /tmp/watchdog-schema-test.lock
+  state_directory: /tmp/watchdog-schema-test-state
+services:
+  - name: broken-proxy-auth
+    check:
+      type: http
+      url: https://example.com/health
+      proxy:
+        url: http://proxy.example.test:8080
+        username_env: WATCHDOG_PROXY_USERNAME

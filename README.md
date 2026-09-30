@@ -84,14 +84,14 @@ yq --version  # Must report Mike Farah yq version v4.x.x
 
 ## Quick start
 
-Download the stable `v1.7.5` source archive from GitHub:
+Download the stable `v1.7.6` source archive from GitHub:
 
 ```bash
 curl -fL \
-  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.7.5.zip \
+  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.7.6.zip \
   -o watchdog.zip
 unzip watchdog.zip
-cd watchdog-1.7.5
+cd watchdog-1.7.6
 ```
 
 Alternatively, clone the repository with Git:
@@ -453,6 +453,37 @@ services:
             regex: '^v[0-9]+\\.[0-9]+\\.[0-9]+$'
         max_total_ms: 800
 ```
+
+HTTP checks can use a private CA, mutual TLS client credentials, and an
+HTTP(S) proxy. TLS hostname and certificate verification remain enabled; do
+not work around an internal CA with insecure verification. Certificate and key
+paths must be absolute, regular, readable files. A client certificate and its
+key must be configured together. Encrypted private keys are not supported:
+keep an unencrypted key readable only by the Watchdog account rather than
+passing a passphrase through a process command line.
+
+```yaml
+services:
+  - name: private-api
+    check:
+      type: http
+      url: https://api.internal.example/health
+      tls:
+        ca_cert_file: /etc/watchdog/pki/internal-ca.pem
+        client_cert_file: /etc/watchdog/pki/watchdog-client.crt
+        client_key_file: /etc/watchdog/pki/watchdog-client.key
+      proxy:
+        url: http://proxy.internal.example:8080
+        username_env: WATCHDOG_PROXY_USERNAME
+        password_env: WATCHDOG_PROXY_PASSWORD
+```
+
+`proxy.url` must be an HTTP(S) URL without embedded credentials. Keep proxy
+credentials in the paired `*_env` fields: Watchdog passes them through a
+private mode-`0600` curl config file, never through curl argv, logs, state,
+metrics, history, or the status page. The same transport fields work in
+`health.liveness` and `health.readiness`. See
+[`examples/http-mtls-proxy.yaml`](examples/http-mtls-proxy.yaml).
 
 If an accepted response takes longer than `max_total_ms`, Watchdog records the
 service as `degraded`, sends the usual transition notification, and exports its

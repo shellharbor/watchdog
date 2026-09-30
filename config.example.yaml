@@ -286,6 +286,16 @@ templates:
       # headers:
       #   - name: Authorization
       #     value_env: WATCHDOG_API_TOKEN
+      # Private CA/client certificates and an authenticated HTTP(S) proxy are
+      # opt-in. Keep client keys root-owned and proxy credentials in env vars.
+      # tls:
+      #   ca_cert_file: /etc/watchdog/pki/internal-ca.pem
+      #   client_cert_file: /etc/watchdog/pki/watchdog-client.crt
+      #   client_key_file: /etc/watchdog/pki/watchdog-client.key
+      # proxy:
+      #   url: http://proxy.internal.example:8080
+      #   username_env: WATCHDOG_PROXY_USERNAME
+      #   password_env: WATCHDOG_PROXY_PASSWORD
       # expect:
       #   content_type: application/json
       #   body_regex: '"status"[[:space:]]*:[[:space:]]*"ok"'

@@ -1208,6 +1208,7 @@ validate_check_definition() {
             [[ "$value" == GET || "$value" == HEAD ]] || die "${description}.method must be GET or HEAD."
             value="$(yaml_read_true_default "${expression}.follow_redirects")"
             [[ "$value" == true || "$value" == false ]] || die "${description}.follow_redirects must be true or false."
+            validate_http_transport "${expression}" "${description}"
             value_type="$(yaml_read "${expression}.success_status | type")"
             if [[ "$value_type" != '!!null' ]]; then
                 [[ "$value_type" == '!!seq' ]] || die "${description}.success_status must be an array."
@@ -1441,6 +1442,13 @@ validate_check_definition() {
             is_positive_integer "$value" || die "${description}.${field} must be a positive integer."
         fi
     done
+
+    if [[ "$check_type" != http ]]; then
+        for field in proxy tls; do
+            value_type="$(yaml_read "${expression}.${field} | type")"
+            [[ "$value_type" == '!!null' ]] || die "${description}.${field} is supported only by HTTP checks."
+        done
+    fi
 }
 
 validate_configuration() {

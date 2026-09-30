@@ -20,6 +20,7 @@ readonly TEST_SCRIPTS=(
     github-action.sh
     health-policy.sh
     history.sh
+    http-transport.sh
     maintenance.sh
     network-oncall-remediation.sh
     notification-routing.sh

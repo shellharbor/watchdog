@@ -81,6 +81,39 @@ expression applied only to strings). The body must be valid JSON; a missing or
 `null` path fails. Watchdog never includes the body or actual asserted value in
 diagnostics, state, metrics, history, or the status page.
 
+### Private CA, mutual TLS, and HTTP(S) proxies
+
+HTTP checks can trust a private CA and present a client certificate when an
+internal endpoint requires mTLS. The same fields work inside `check`,
+`health.liveness`, and `health.readiness`; normal certificate and hostname
+verification remains enabled.
+
+```yaml
+services:
+  - name: private-orders-api
+    check:
+      type: http
+      url: https://orders.internal.example/health
+      tls:
+        ca_cert_file: /etc/watchdog/pki/internal-ca.pem
+        client_cert_file: /etc/watchdog/pki/watchdog-client.crt
+        client_key_file: /etc/watchdog/pki/watchdog-client.key
+      proxy:
+        url: http://proxy.internal.example:8080
+        username_env: WATCHDOG_PROXY_USERNAME
+        password_env: WATCHDOG_PROXY_PASSWORD
+```
+
+All certificate paths must be absolute, readable regular files. Configure the
+client certificate and private key together, and keep the key readable only by
+the Watchdog account. Encrypted private keys are not supported, so a passphrase
+can never be exposed through a process command line. `proxy.url` accepts only
+an HTTP(S) URL without embedded
+credentials. Proxy credentials require both environment-variable fields and
+are put in a temporary mode-`0600` curl config file; they never enter curl argv,
+logs, state, history, metrics, or the generated status page. Run `validate`
+after mounting or deploying certificate files to the host or container.
+
 ## TCP ports
 
 TCP checks use Bash's `/dev/tcp` facility, so no separate `nc` dependency is

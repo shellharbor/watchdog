@@ -140,6 +140,35 @@ of `equals` (a string, number, or boolean matched with its JSON type) or
 `regex` (an extended regular expression applied only to a string). Missing or
 `null` values fail the check.
 
+## HTTP transport: mTLS and proxy
+
+Use `check.tls` to supply a private CA and mTLS client material, and
+`check.proxy` for a per-check HTTP(S) proxy. These maps deep-merge through HTTP
+templates and are also supported in liveness/readiness checks.
+
+```yaml
+check:
+  type: http
+  url: https://catalog.internal.example/health
+  tls:
+    ca_cert_file: /etc/watchdog/pki/internal-ca.pem
+    client_cert_file: /etc/watchdog/pki/watchdog-client.crt
+    client_key_file: /etc/watchdog/pki/watchdog-client.key
+  proxy:
+    url: http://proxy.internal.example:8080
+    username_env: WATCHDOG_PROXY_USERNAME
+    password_env: WATCHDOG_PROXY_PASSWORD
+```
+
+All three certificate fields are optional, but `client_cert_file` and
+`client_key_file` are a pair. Paths must be absolute readable regular files.
+Encrypted private keys are not supported; protect an unencrypted key with
+filesystem permissions instead of providing a passphrase.
+`proxy.url` must not embed credentials; proxy username and password are an
+optional pair of environment-variable names. Watchdog stores those credentials
+only in a temporary mode-`0600` curl config file. `validate` checks the paths,
+field pairs, and URL before any health check runs.
+
 ## Service notification routing
 
 The top-level `notifications` section enables delivery providers. A service

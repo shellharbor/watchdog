@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+# Private HTTP health check through an authenticated proxy with mTLS.
+# Create the referenced PEM files, protect the private key, and export both
+# proxy environment variables before enabling this scheduled check.
+settings:
+  log_file: /var/log/service-watchdog/service-watchdog.log
+  lock_file: /run/lock/service-watchdog.lock
+  state_directory: /var/lib/service-watchdog
+  default_attempts: 1
+  default_retry_delay: 0
+
+services:
+  - name: private-api
+    check:
+      type: http
+      url: https://api.internal.example/health
+      timeout: 10
+      success_status: [200]
+      tls:
+        ca_cert_file: /etc/watchdog/pki/internal-ca.pem
+        client_cert_file: /etc/watchdog/pki/watchdog-client.crt
+        client_key_file: /etc/watchdog/pki/watchdog-client.key
+      proxy:
+        url: http://proxy.internal.example:8080
+        username_env: WATCHDOG_PROXY_USERNAME
+        password_env: WATCHDOG_PROXY_PASSWORD
+    actions:
+      commands: []

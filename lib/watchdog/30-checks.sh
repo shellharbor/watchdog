@@ -27,9 +27,10 @@ json_assertion_path_to_yq() {
 
 check_http() {
     local index="$1"
-    local url method follow_redirects timeout_value error_file body_file="" http_status content_type time_total curl_status error_output
+    local url method follow_redirects timeout_value error_file body_file="" curl_config="" http_status content_type time_total curl_status error_output
     local header_count header_index header_name header_value header_value_env expected_content_type body_regex max_total_ms curl_output
     local json_assertion_count json_assertion_index json_path yq_path equals_type expected_json actual_json actual_type actual_value
+    local ca_cert_file client_cert_file client_key_file proxy_url proxy_username_env proxy_password_env proxy_username proxy_password
     local -a curl_command
     url="$(yaml_read "${CHECK_CONFIG_PATH}.url")"
     method="$(yaml_read "${CHECK_CONFIG_PATH}.method // \"GET\"")"
@@ -74,6 +75,49 @@ check_http() {
         curl_command+=(--header "${header_name}: ${header_value}")
     done
     [[ "$follow_redirects" == "true" ]] && curl_command+=(--location --max-redirs 5)
+    ca_cert_file="$(yaml_read "${CHECK_CONFIG_PATH}.tls.ca_cert_file // \"\"")"
+    client_cert_file="$(yaml_read "${CHECK_CONFIG_PATH}.tls.client_cert_file // \"\"")"
+    client_key_file="$(yaml_read "${CHECK_CONFIG_PATH}.tls.client_key_file // \"\"")"
+    [[ -z "$ca_cert_file" ]] || curl_command+=(--cacert "$ca_cert_file")
+    [[ -z "$client_cert_file" ]] || curl_command+=(--cert "$client_cert_file")
+    [[ -z "$client_key_file" ]] || curl_command+=(--key "$client_key_file")
+
+    proxy_url="$(yaml_read "${CHECK_CONFIG_PATH}.proxy.url // \"\"")"
+    if [[ -n "$proxy_url" ]]; then
+        curl_command+=(--proxy "$proxy_url")
+        proxy_username_env="$(yaml_read "${CHECK_CONFIG_PATH}.proxy.username_env // \"\"")"
+        proxy_password_env="$(yaml_read "${CHECK_CONFIG_PATH}.proxy.password_env // \"\"")"
+        if [[ -n "$proxy_username_env" ]]; then
+            proxy_username="${!proxy_username_env:-}"
+            proxy_password="${!proxy_password_env:-}"
+            if [[ -z "$proxy_username" || -z "$proxy_password" ]]; then
+                [[ -z "$body_file" ]] || rm -f -- "$body_file"
+                CHECK_EXIT_CODE=2
+                if [[ -z "$proxy_username" ]]; then
+                    CHECK_DETAIL="missing HTTP proxy environment variable ${proxy_username_env}"
+                else
+                    CHECK_DETAIL="missing HTTP proxy environment variable ${proxy_password_env}"
+                fi
+                return 1
+            fi
+            if [[ "$proxy_username" == *$'\r'* || "$proxy_username" == *$'\n'* || "$proxy_password" == *$'\r'* || "$proxy_password" == *$'\n'* ]]; then
+                [[ -z "$body_file" ]] || rm -f -- "$body_file"
+                CHECK_EXIT_CODE=2
+                CHECK_DETAIL='HTTP proxy credentials contain a newline'
+                return 1
+            fi
+            curl_config="$(mktemp "${TEMP_DIRECTORY}/http-${index}-proxy.XXXXXX")" || {
+                [[ -z "$body_file" ]] || rm -f -- "$body_file"
+                CHECK_EXIT_CODE=2; CHECK_DETAIL='cannot create HTTP proxy credentials temporary file'; return 1;
+            }
+            if ! chmod 0600 "$curl_config" ||
+                ! printf 'proxy-user = "%s"\n' "$(escape_curl_config_value "${proxy_username}:${proxy_password}")" >"$curl_config"; then
+                rm -f -- "$curl_config" "$body_file"
+                CHECK_EXIT_CODE=2; CHECK_DETAIL='cannot write HTTP proxy credentials temporary file'; return 1;
+            fi
+            curl_command+=(--config "$curl_config")
+        fi
+    fi
     curl_command+=("$url")
 
     if [[ -n "$body_file" ]]; then
@@ -84,7 +128,7 @@ check_http() {
     curl_status=$?
     error_output=""
     [[ -s "$error_file" ]] && error_output="$(sanitize_detail "$(<"$error_file")")"
-    rm -f -- "$error_file"
+    rm -f -- "$error_file" "$curl_config"
 
     IFS=$'\t' read -r http_status content_type time_total <<<"$curl_output"
     CHECK_HTTP_STATUS="$http_status"
