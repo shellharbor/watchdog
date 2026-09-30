@@ -1180,6 +1180,7 @@ validate_threshold_source() {
 validate_check_definition() {
     local expression="$1" description="$2" check_type value value_type status_count status_index status_code port field threshold_count=0
     local header_count header_index header_type header_name header_value_type header_env_type pattern_status
+    local assertion_count assertion_index assertion_type assertion_path equals_type regex_type
     validate_string "${expression}.type" "${description}.type"
     check_type="$(yaml_read "${expression}.type")"
     case "$check_type" in
@@ -1246,6 +1247,39 @@ validate_check_definition() {
                     printf '' | grep -E -- "$value" >/dev/null 2>&1
                     pattern_status=$?
                     (( pattern_status <= 1 )) || die "${description}.expect.body_regex is not a valid extended regular expression."
+                fi
+                value_type="$(yaml_read "${expression}.expect.json | type")"
+                if [[ "$value_type" != '!!null' ]]; then
+                    [[ "$value_type" == '!!seq' ]] || die "${description}.expect.json must be an array."
+                    assertion_count="$(yaml_read "${expression}.expect.json | length")"
+                    (( assertion_count > 0 && assertion_count <= 20 )) || die "${description}.expect.json must contain from 1 through 20 assertions."
+                    for ((assertion_index = 0; assertion_index < assertion_count; assertion_index++)); do
+                        assertion_type="$(yaml_read "${expression}.expect.json[$assertion_index] | type")"
+                        [[ "$assertion_type" == '!!map' ]] || die "${description}.expect.json[$assertion_index] must be a map."
+                        validate_string "${expression}.expect.json[$assertion_index].path" "${description}.expect.json[$assertion_index].path"
+                        assertion_path="$(yaml_read "${expression}.expect.json[$assertion_index].path")"
+                        [[ "$assertion_path" =~ ^\$([.][A-Za-z_][A-Za-z0-9_]*|[[][0-9]+[]])*$ ]] ||
+                            die "${description}.expect.json[$assertion_index].path must use only $, .field, and [index] segments."
+                        equals_type="$(yaml_read "${expression}.expect.json[$assertion_index].equals | type")"
+                        regex_type="$(yaml_read "${expression}.expect.json[$assertion_index].regex | type")"
+                        [[ "$equals_type" == '!!null' || "$regex_type" == '!!null' ]] ||
+                            die "${description}.expect.json[$assertion_index] must set only one of equals or regex."
+                        [[ "$equals_type" != '!!null' || "$regex_type" != '!!null' ]] ||
+                            die "${description}.expect.json[$assertion_index] needs equals or regex."
+                        if [[ "$equals_type" != '!!null' ]]; then
+                            case "$equals_type" in
+                                '!!str'|'!!int'|'!!float'|'!!bool') ;;
+                                *) die "${description}.expect.json[$assertion_index].equals must be a string, number, or boolean." ;;
+                            esac
+                        else
+                            validate_string "${expression}.expect.json[$assertion_index].regex" "${description}.expect.json[$assertion_index].regex"
+                            value="$(yaml_read "${expression}.expect.json[$assertion_index].regex")"
+                            [[ -n "$value" ]] || die "${description}.expect.json[$assertion_index].regex must not be empty."
+                            printf '' | grep -E -- "$value" >/dev/null 2>&1
+                            pattern_status=$?
+                            (( pattern_status <= 1 )) || die "${description}.expect.json[$assertion_index].regex is not a valid extended regular expression."
+                        fi
+                    done
                 fi
                 value_type="$(yaml_read "${expression}.expect.max_total_ms | type")"
                 if [[ "$value_type" != '!!null' ]]; then

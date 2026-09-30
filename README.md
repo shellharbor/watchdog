@@ -204,8 +204,9 @@ usable, but deliberately **does not** indicate whether the monitored services
 are healthy. Use the exit code from each scheduled run and Watchdog's alerts,
 metrics, and status command for target health.
 
-`ENTRYPOINT` forwards signals directly to the Watchdog process, so `docker
-stop` reaches its normal cleanup trap and retains Watchdog's exit-code contract.
+`ENTRYPOINT` forwards stop signals through Watchdog and its check subprocesses, then
+waits for the normal cleanup trap so `docker stop` retains Watchdog's exit-code
+contract.
 The container contract for a future external scheduler or agent is intentionally
 small: mount a readable config at `/etc/watchdog/config.yaml` (or set
 `WATCHDOG_CONFIG`), mount the required output paths, supply secrets as
@@ -413,7 +414,13 @@ literal `value`: Watchdog validates the variable name, reads it only at request
 time, and never writes its value to logs, state, metrics, history, or the status
 page. `expect.content_type` compares a response media type while ignoring its
 parameters; `expect.body_regex` requires an extended-regex match in a temporary
-response capture limited to 64 KiB. Neither exposes response content in logs.
+response capture limited to 64 KiB. `expect.json` can also assert selected
+JSON scalars without exposing response content in logs. Its paths are
+deliberately limited to `$`, `.field`, and zero-based `[index]` segments—no
+wildcards, filters, recursive descent, or expressions. Each of up to 20
+assertions uses exactly one of `equals` (a string, number, or boolean with its
+JSON type) or `regex` (an extended regular expression for a string). The body
+must be valid JSON and a missing or `null` value fails the check.
 
 ```yaml
 services:
@@ -428,7 +435,13 @@ services:
           value_env: WATCHDOG_API_TOKEN
       expect:
         content_type: application/json
-        body_regex: '"status"[[:space:]]*:[[:space:]]*"ok"'
+        json:
+          - path: $.status
+            equals: ok
+          - path: $.ready
+            equals: true
+          - path: $.release.version
+            regex: '^v[0-9]+\\.[0-9]+\\.[0-9]+$'
         max_total_ms: 800
 ```
 
@@ -436,7 +449,9 @@ If an accepted response takes longer than `max_total_ms`, Watchdog records the
 service as `degraded`, sends the usual transition notification, and exports its
 latency metrics. It intentionally does **not** run remediation, affect circuit
 breakers/backoff/flapping protection, or increment unavailable counters. An
-unexpected content type or body mismatch remains an ordinary failed check.
+unexpected content type, body, or JSON assertion remains an ordinary failed
+check. JSON assertions parse the same bounded private response capture as
+`body_regex`; neither the response body nor the compared value is logged.
 See [`examples/smart-http.yaml`](examples/smart-http.yaml) for a complete,
 safe-to-adapt configuration.
 

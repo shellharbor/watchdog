@@ -19,7 +19,13 @@ services:
           value_env: WATCHDOG_API_TOKEN
       expect:
         content_type: application/json
-        body_regex: '"status"[[:space:]]*:[[:space:]]*"ok"'
+        json:
+          - path: $.status
+            equals: ok
+          - path: $.ready
+            equals: true
+          - path: $.release.version
+            regex: '^v[0-9]+\\.[0-9]+\\.[0-9]+$'
         max_total_ms: 800
     actions:
       commands: []

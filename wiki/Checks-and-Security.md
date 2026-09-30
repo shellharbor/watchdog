@@ -54,7 +54,11 @@ services:
           value_env: WATCHDOG_ORDERS_API_TOKEN
       expect:
         content_type: application/json
-        body_regex: '"ready"[[:space:]]*:[[:space:]]*true'
+        json:
+          - path: $.ready
+            equals: true
+          - path: $.release.version
+            regex: '^v[0-9]+\\.[0-9]+\\.[0-9]+$'
         max_total_ms: 500
 ```
 
@@ -67,6 +71,15 @@ ordinary failed check. A successful response slower than `max_total_ms` becomes
 never runs remediation or changes circuit-breaker, backoff, flapping, or
 unavailable-counter state. See
 [`examples/smart-http.yaml`](../examples/smart-http.yaml) for a complete file.
+
+For structured responses, `expect.json` has up to 20 limited assertions. A
+path starts at `$` and may contain only property segments such as `.ready` and
+zero-based indexes such as `[0]`; wildcards, filters, recursive descent, and
+expressions are rejected. Each assertion has exactly one `equals` (string,
+number, or boolean, matched with JSON type) or `regex` (an extended regular
+expression applied only to strings). The body must be valid JSON; a missing or
+`null` path fails. Watchdog never includes the body or actual asserted value in
+diagnostics, state, metrics, history, or the status page.
 
 ## TCP ports
 

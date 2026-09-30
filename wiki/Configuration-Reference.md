@@ -111,6 +111,35 @@ services:
 Templates cannot inherit from other templates. They may omit fields because
 they are completed when a service references them.
 
+## HTTP JSON assertions
+
+Use `check.expect.json` when a successful HTTP response must contain a small
+set of known JSON fields. The body is captured only for assertions, bounded to
+64 KiB, parsed as JSON, and deleted without being logged.
+
+```yaml
+services:
+  - name: catalog-api
+    check:
+      type: http
+      url: https://catalog.example.com/health
+      expect:
+        json:
+          - path: $.status
+            equals: ok
+          - path: $.dependencies.database.ready
+            equals: true
+          - path: $.release.version
+            regex: '^v[0-9]+\\.[0-9]+\\.[0-9]+$'
+```
+
+Paths allow only the root `$`, `.field` properties, and zero-based `[index]`
+segments. Wildcards, filters, recursive descent, and expressions are not
+supported. Each list has 1–20 assertions, and every assertion uses exactly one
+of `equals` (a string, number, or boolean matched with its JSON type) or
+`regex` (an extended regular expression applied only to a string). Missing or
+`null` values fail the check.
+
 ## Service notification routing
 
 The top-level `notifications` section enables delivery providers. A service

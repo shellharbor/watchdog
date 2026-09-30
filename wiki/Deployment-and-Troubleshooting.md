@@ -51,8 +51,9 @@ cycle each minute:
 The container's `HEALTHCHECK` runs Watchdog's read-only `validate` command. It
 checks the mounted configuration and required runtime dependencies, not the
 monitored services. Consume the scheduled run's exit code plus Watchdog alerts,
-metrics, and `status` output for service health. The entrypoint uses `exec`, so
-`docker stop` reaches Watchdog's normal signal cleanup.
+metrics, and `status` output for service health. The entrypoint forwards stop
+signals through the Watchdog process tree, including a running check command,
+then waits for Watchdog's normal cleanup and preserves its exit code.
 
 Secrets remain environment variables named by the configuration's `*_env`
 fields. Do not bake them into an image or compose file. A one-off run can use a

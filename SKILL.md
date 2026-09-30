@@ -30,6 +30,11 @@ projects.
 - An HTTP `expect.max_total_ms` breach is a `degraded` latency signal: preserve
   its transition alert and metrics, but never route it into remediation,
   circuit-breaker, backoff, flapping, or unavailable-counter handling.
+- HTTP `expect.json` assertions are deliberately constrained: accept only `$`,
+  `.field`, and zero-based `[index]` path segments; at most 20 assertions; and
+  exactly one typed scalar `equals` or string-only ERE `regex` per assertion.
+  Parse the existing 64 KiB private response capture as JSON, fail missing or
+  null paths, and never include a response body or asserted value in details.
 - `tls_cert` is an optional OpenSSL-backed leaf-certificate expiry check. It
   must verify `openssl` only when enabled, pass host and SNI as separate argv
   values, and expose expiry context without logging or persisting certificate
@@ -60,9 +65,10 @@ projects.
   Preserve its non-root UID/GID `10001`, default least-privilege contract, and
   `WATCHDOG_CONFIG` mount interface. The image healthcheck runs only
   `validate`, never target checks; target health remains the scheduled run's
-  exit status. Docker daemon access belongs only in the explicit `-docker`
-  image/profile and must never become a default mount, capability, privilege,
-  or network setting.
+  exit status. Its entrypoint must forward stop signals through Watchdog's
+  check process tree, wait for cleanup, and retain Watchdog's exit code. Docker
+  daemon access belongs only in the explicit `-docker` image/profile and must
+  never become a default mount, capability, privilege, or network setting.
 - `status_page.uptime` is opt-in and requires `history.enabled: true`. It
   renders only sampled, observed availability from history: preserve grey
   intervals when no record exists and never present the bars as an SLA.

@@ -66,6 +66,8 @@ expected_fields = {
     "history-relative-path": "history.path",
     "history-storage": "history.storage",
     "http-header-values": "services[0].check.headers[0]",
+    "http-json-assertion": "services[0].check.expect.json[0]",
+    "http-json-path": "services[0].check.expect.json[0].path",
     "http-latency-zero": "services[0].check.expect.max_total_ms",
     "maintenance-time": "maintenance.windows[0].time",
     "missing-command": "services[0].check.commands",

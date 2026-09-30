@@ -285,6 +285,11 @@ templates:
       # expect:
       #   content_type: application/json
       #   body_regex: '"status"[[:space:]]*:[[:space:]]*"ok"'
+      #   json:
+      #     - path: $.status
+      #       equals: ok
+      #     - path: $.ready
+      #       equals: true
       #   max_total_ms: 800  # Reports degraded and never remediates.
     actions:
       cooldown: 300

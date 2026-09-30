@@ -42,6 +42,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             content_type, body = "text/plain", b'{"status":"ok"}'
         elif self.path == "/wrong-body":
             content_type, body = "application/json", b'{"status":"not-ready"}'
+        elif self.path == "/json-ok":
+            content_type, body = "application/json", b'{"status":"ok","ready":true,"build":{"number":17},"releases":["v1.7.2"]}'
+        elif self.path == "/json-mismatch":
+            content_type, body = "application/json", b'{"status":"not-ready","token":"response-body-secret"}'
+        elif self.path == "/json-missing":
+            content_type, body = "application/json", b'{"status":"ok"}'
+        elif self.path == "/json-invalid":
+            content_type, body = "application/json", b'not json'
+        elif self.path == "/json-type-mismatch":
+            content_type, body = "application/json", b'{"ready":"true"}'
+        elif self.path == "/json-regex-mismatch":
+            content_type, body = "application/json", b'{"release":"candidate"}'
+        elif self.path == "/json-regex-number":
+            content_type, body = "application/json", b'{"release":17}'
         else:
             content_type, body = "application/json; charset=utf-8", b'{"status":"ok"}'
         self.send_response(200)
@@ -74,7 +88,7 @@ services:
   - name: smart-ok
     check:
       type: http
-      url: http://127.0.0.1:${PORT}/ok
+      url: http://127.0.0.1:${PORT}/json-ok
       headers:
         - name: Accept
           value: application/json
@@ -83,6 +97,15 @@ services:
       expect:
         content_type: application/json
         body_regex: '"status"[[:space:]]*:[[:space:]]*"ok"'
+        json:
+          - path: $.status
+            equals: ok
+          - path: $.ready
+            equals: true
+          - path: $.build.number
+            equals: 17
+          - path: $.releases[0]
+            regex: '^v[0-9]+\\.[0-9]+\\.[0-9]+$'
         max_total_ms: 1000
     actions: {commands: []}
   - name: slow-api
@@ -105,6 +128,60 @@ services:
       url: http://127.0.0.1:${PORT}/wrong-body
       expect: {body_regex: '"status"[[:space:]]*:[[:space:]]*"ok"'}
     actions: {commands: []}
+  - name: json-mismatch
+    check:
+      type: http
+      url: http://127.0.0.1:${PORT}/json-mismatch
+      expect:
+        json:
+          - path: $.status
+            equals: ok
+    actions: {commands: []}
+  - name: json-missing
+    check:
+      type: http
+      url: http://127.0.0.1:${PORT}/json-missing
+      expect:
+        json:
+          - path: $.details.ready
+            equals: true
+    actions: {commands: []}
+  - name: json-invalid
+    check:
+      type: http
+      url: http://127.0.0.1:${PORT}/json-invalid
+      expect:
+        json:
+          - path: $.status
+            equals: ok
+    actions: {commands: []}
+  - name: json-type-mismatch
+    check:
+      type: http
+      url: http://127.0.0.1:${PORT}/json-type-mismatch
+      expect:
+        json:
+          - path: $.ready
+            equals: true
+    actions: {commands: []}
+  - name: json-regex-mismatch
+    check:
+      type: http
+      url: http://127.0.0.1:${PORT}/json-regex-mismatch
+      expect:
+        json:
+          - path: $.release
+            regex: '^v[0-9]+$'
+    actions: {commands: []}
+  - name: json-regex-number
+    check:
+      type: http
+      url: http://127.0.0.1:${PORT}/json-regex-number
+      expect:
+        json:
+          - path: $.release
+            regex: '^v[0-9]+$'
+    actions: {commands: []}
 EOF
 
 set +e
@@ -116,10 +193,20 @@ set -e
 [[ "$(<"${TEST_DIRECTORY}/state/slow-api.state")" == degraded ]]
 [[ "$(<"${TEST_DIRECTORY}/state/wrong-content.state")" == unavailable ]]
 [[ "$(<"${TEST_DIRECTORY}/state/wrong-body.state")" == unavailable ]]
+[[ "$(<"${TEST_DIRECTORY}/state/json-mismatch.state")" == unavailable ]]
+[[ "$(<"${TEST_DIRECTORY}/state/json-missing.state")" == unavailable ]]
+[[ "$(<"${TEST_DIRECTORY}/state/json-invalid.state")" == unavailable ]]
+[[ "$(<"${TEST_DIRECTORY}/state/json-type-mismatch.state")" == unavailable ]]
+[[ "$(<"${TEST_DIRECTORY}/state/json-regex-mismatch.state")" == unavailable ]]
+[[ "$(<"${TEST_DIRECTORY}/state/json-regex-number.state")" == unavailable ]]
 [[ ! -e "${TEST_DIRECTORY}/slow-remediation-ran" ]]
-grep -F $'/ok\ttest-smart-http-secret' "${TEST_DIRECTORY}/requests.log" >/dev/null
+grep -F $'/json-ok\ttest-smart-http-secret' "${TEST_DIRECTORY}/requests.log" >/dev/null
 if grep -F 'test-smart-http-secret' "${TEST_DIRECTORY}/watchdog.log" >/dev/null; then
     printf 'Secret header value leaked into the operational log.\n' >&2
+    exit 1
+fi
+if grep -F 'response-body-secret' "${TEST_DIRECTORY}/watchdog.log" >/dev/null; then
+    printf 'JSON response content leaked into the operational log.\n' >&2
     exit 1
 fi
 grep -F 'watchdog_service_http_last_total_seconds{service="slow-api",check_type="http"} ' "${TEST_DIRECTORY}/metrics/watchdog.prom" >/dev/null
@@ -155,5 +242,27 @@ status=$?
 set -e
 [[ "$status" == 2 ]]
 grep -F 'services[0].check.expect.body_regex' "${TEST_DIRECTORY}/invalid.out" >/dev/null
+
+cat >"${TEST_DIRECTORY}/invalid-json.yaml" <<EOF
+settings:
+  log_file: ${TEST_DIRECTORY}/invalid-json.log
+  lock_file: ${TEST_DIRECTORY}/invalid-json.lock
+  state_directory: ${TEST_DIRECTORY}/invalid-json-state
+services:
+  - name: broken-json-path
+    check:
+      type: http
+      url: http://127.0.0.1:${PORT}/json-ok
+      expect:
+        json:
+          - path: '$..status'
+            equals: ok
+EOF
+set +e
+bash "$WATCHDOG_SCRIPT" validate -c "${TEST_DIRECTORY}/invalid-json.yaml" >"${TEST_DIRECTORY}/invalid-json.out" 2>&1
+status=$?
+set -e
+[[ "$status" == 2 ]]
+grep -F 'services[0].check.expect.json[0].path' "${TEST_DIRECTORY}/invalid-json.out" >/dev/null
 
 printf 'Smart HTTP test passed.\n'

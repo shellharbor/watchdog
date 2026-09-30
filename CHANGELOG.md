@@ -9,6 +9,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- Limited, opt-in JSON assertions for HTTP checks through `expect.json`.
+  Operators can match exact typed scalar fields or regex-match selected string
+  fields through safe root/property/index paths, without evaluating expressions
+  or exposing response bodies and values in Watchdog output.
 - Per-service notification routing through `services[].notify.channels`, with
   opt-in severity and runbook context for templates, PagerDuty, and Opsgenie.
   Existing configurations continue to deliver through every globally enabled
@@ -23,6 +27,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Docker runtime regression coverage for a read-only/non-root healthy cycle,
   invalid configuration exit status, configuration-only healthcheck, graceful
   signal handling, and the separately opt-in Docker socket image.
+
+### Fixed
+
+- The Docker entrypoint now forwards stop signals through an active Watchdog
+  check process tree before waiting for cleanup. Long-running checks therefore
+  preserve Watchdog's documented runtime exit code instead of being forcibly
+  killed after Docker's stop timeout.
 
 ## [1.7.2] - 2026-09-26
 
