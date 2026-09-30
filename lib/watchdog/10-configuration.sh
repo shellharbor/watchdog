@@ -839,10 +839,26 @@ validate_backoff_configuration() {
 }
 
 validate_metrics_configuration() {
-    local enabled value labels_type count index key value_type
+    local enabled value labels_type count index key value_type heartbeat_type heartbeat_enabled heartbeat_count
     enabled="$(yaml_read '.metrics.enabled // false')"
     [[ "$enabled" == true || "$enabled" == false ]] || die "metrics.enabled must be true or false."
-    [[ "$enabled" == true ]] || return 0
+    heartbeat_type="$(yaml_read '.metrics.heartbeat | type')"
+    [[ "$heartbeat_type" == '!!null' || "$heartbeat_type" == '!!map' ]] ||
+        die 'metrics.heartbeat must be a YAML map.'
+    if [[ "$heartbeat_type" == '!!map' ]]; then
+        heartbeat_count="$(yaml_read '.metrics.heartbeat | length')"
+        for ((index = 0; index < heartbeat_count; index++)); do
+            key="$(yaml_read ".metrics.heartbeat | to_entries[$index].key")"
+            [[ "$key" == enabled ]] || die "metrics.heartbeat.${key} is not supported."
+        done
+    fi
+    heartbeat_enabled="$(yaml_read '.metrics.heartbeat.enabled // false')"
+    [[ "$heartbeat_enabled" == true || "$heartbeat_enabled" == false ]] ||
+        die 'metrics.heartbeat.enabled must be true or false.'
+    [[ "$enabled" == true ]] || {
+        [[ "$heartbeat_enabled" == false ]] || die 'metrics.heartbeat.enabled requires metrics.enabled: true.'
+        return 0
+    }
     validate_string '.metrics.textfile_directory' 'metrics.textfile_directory'
     value="$(yaml_read '.metrics.textfile_directory')"
     [[ "$value" == /* ]] || die "metrics.textfile_directory must be an absolute path."
@@ -1629,6 +1645,7 @@ configure_metrics() {
     METRICS_DIRECTORY="$(yaml_read '.metrics.textfile_directory')"
     METRICS_FILENAME="$(yaml_read '.metrics.filename')"
     METRICS_PREFIX="$(yaml_read '.metrics.prefix')"
+    [[ "$(yaml_read '.metrics.heartbeat.enabled // false')" == true ]] && METRICS_HEARTBEAT_ENABLED=1
     [[ "$METRICS_FILENAME" == *.prom ]] ||
         log WARN "result=metrics-warning reason=filename-not-prom filename=${METRICS_FILENAME}"
 }

@@ -44,7 +44,8 @@ For task-oriented guides and additional runnable examples, see the
 - Per-service action cooldown
 - Optional persistent flapping guard and exponential action backoff
 - Dependency-ordered checks and separate liveness/readiness endpoints
-- Bounded incident history, expanded Prometheus textfile metrics, and opt-in action allowlist
+- Bounded incident history, Prometheus textfile metrics with scheduler heartbeat, and opt-in action allowlist
+- Ready Grafana dashboard and Prometheus/Alertmanager observability assets
 - Optional per-check history, uptime reports, ASCII trends, and static observed-availability bars
 - Optional health verification after remediation
 - Failure and recovery hooks with environment variables
@@ -83,14 +84,14 @@ yq --version  # Must report Mike Farah yq version v4.x.x
 
 ## Quick start
 
-Download the stable `v1.7.2` source archive from GitHub:
+Download the stable `v1.7.5` source archive from GitHub:
 
 ```bash
 curl -fL \
-  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.7.2.zip \
+  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.7.5.zip \
   -o watchdog.zip
 unzip watchdog.zip
-cd watchdog-1.7.2
+cd watchdog-1.7.5
 ```
 
 Alternatively, clone the repository with Git:
@@ -286,6 +287,14 @@ from the same directory as `service-watchdog.sh`; install or copy both files
 together. The `Release metadata` GitHub Actions workflow verifies that a pushed
 `vX.Y.Z` tag, `VERSION`, `--version`, the stable source archive in this README,
 and the matching changelog entry agree.
+
+Before creating a release tag, run the same check locally with the intended
+tag. It fails with a specific mismatch instead of leaving GitHub Actions to
+discover it after publication:
+
+```bash
+bash ./scripts/release-preflight.sh vX.Y.Z
+```
 
 To test the development branch instead, clone the repository as shown above or
 download [`main.zip`](https://github.com/shellharbor/watchdog/archive/refs/heads/main.zip).
@@ -1140,6 +1149,8 @@ metrics:
   static_labels:
     instance: prod-web-01
     datacenter: msk-1
+  heartbeat:
+    enabled: true
 ```
 
 Configure node_exporter to collect the directory:
@@ -1160,6 +1171,27 @@ backoff time remaining. HTTP services also export
 and optional static labels; incident IDs, command output, response bodies, and
 secrets are not labels. For example, alert when
 `watchdog_service_state{service="api"} == 1`.
+
+`metrics.heartbeat.enabled` additionally emits
+`<prefix>_heartbeat_timestamp_seconds` with **only** the configured static
+labels. It records the time at which Watchdog completed a full ordinary monitor
+run, even if a service is unhealthy, so it detects a missing timer/cron run
+rather than a service incident. It is deliberately omitted for `validate`,
+`status`, reports, `notify-test`, `--dry-run`, configuration/runtime failures,
+and the first manual `-s SERVICE` partial run. After a full run establishes a
+heartbeat, a partial run re-exports the previous timestamp without refreshing
+it; it therefore cannot make the scheduler look healthy.
+
+Ready-to-import observability assets are included in
+[`observability/`](observability/): a Grafana overview dashboard, Prometheus
+alert rules for stale heartbeat/unavailable/degraded services, and an
+Alertmanager routing snippet. Import the dashboard, load the rules through
+Prometheus, then set the heartbeat threshold to at least twice the interval of
+your systemd timer or cron job. The bundled queries use the default
+`prefix: watchdog`; replace `watchdog_` in the assets if you set another prefix.
+The worked
+[`prometheus-heartbeat.yaml`](examples/prometheus-heartbeat.yaml) example uses
+the same layout.
 
 ```text
 watchdog → watchdog.prom → node_exporter → Prometheus → Grafana

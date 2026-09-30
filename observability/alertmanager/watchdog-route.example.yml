@@ -1,0 +1,20 @@
+# Merge this snippet into an existing Alertmanager configuration. It deliberately
+# defines no transport credentials or destination: reuse an approved receiver
+# from your environment, or add one through your secret-management process.
+#
+# Place `routes` under the root `route:` object and add/select the named receiver
+# under the root `receivers:` list. Do not paste this file as a standalone
+# Alertmanager configuration.
+routes:
+  - receiver: watchdog-notifications
+    matchers:
+      - component="watchdog"
+    group_by: [alertname, instance, service]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+
+receivers:
+  - name: watchdog-notifications
+    # Configure email_configs, slack_configs, webhook_configs, or another
+    # approved receiver here. Keep credentials in Alertmanager's secret store.

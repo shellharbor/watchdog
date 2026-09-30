@@ -161,6 +161,8 @@ metrics:
   static_labels:
     instance: prod-web-01
     datacenter: msk-1
+  heartbeat:
+    enabled: true
 ```
 
 Configure node_exporter with:
@@ -179,6 +181,35 @@ The exported states use `0` healthy, `1` unavailable, `2` unknown,
 `3` dependency failed, `4` degraded, and `5` recovering. Metrics include check
 and action counters, incident duration, escalation count, and action blockers;
 they never include incident IDs, command output, or secrets as labels.
+
+### Scheduler heartbeat and ready assets
+
+Set `metrics.heartbeat.enabled: true` to write
+`<prefix>_heartbeat_timestamp_seconds`. The metric has only `static_labels`,
+never a service or incident label, and is updated after Watchdog completes a
+full normal monitor run. An unavailable service still updates it: service-state
+alerts and scheduler-liveness alerts solve different problems.
+
+It is intentionally absent for `validate`, `status`, reports, `notify-test`,
+`--dry-run`, configuration/runtime errors, and an initial targeted `-s SERVICE`
+run. Once a full run has written a heartbeat, a targeted run re-exports that
+old timestamp rather than refreshing or removing it. This prevents an
+operator's partial test from hiding a failed timer or cron schedule.
+
+The repository's
+[`observability/`](https://github.com/shellharbor/watchdog/tree/main/observability)
+directory contains:
+
+- `grafana/watchdog-overview.json` — importable overview dashboard;
+- `prometheus/watchdog-alerts.yml` — heartbeat, unavailable, and degraded
+  alert rules; and
+- `alertmanager/watchdog-route.example.yml` — mergeable routing snippet.
+
+Load the rule file with Prometheus and import the dashboard after choosing its
+Prometheus datasource. The included stale-heartbeat threshold is an example:
+set it to at least twice the interval of your actual timer or cron schedule.
+The bundled queries use the default `prefix: watchdog`; replace `watchdog_` in
+the dashboard and rule file if your configuration uses another prefix.
 
 ## Static status page
 

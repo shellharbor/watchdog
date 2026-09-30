@@ -103,6 +103,10 @@ metrics:
   static_labels:
     instance: prod-web-01
     datacenter: msk-1
+  # Scheduler liveness only: emits watchdog_heartbeat_timestamp_seconds after
+  # a complete normal run, never after --dry-run or a targeted -s run.
+  heartbeat:
+    enabled: false
 
 # Optional self-hosted static status page.
 status_page:

@@ -1,0 +1,14 @@
+settings:
+  log_file: /tmp/watchdog-heartbeat-invalid.log
+  lock_file: /tmp/watchdog-heartbeat-invalid.lock
+  state_directory: /tmp/watchdog-heartbeat-invalid-state
+metrics:
+  enabled: false
+  heartbeat:
+    enabled: true
+services:
+  - name: api
+    check:
+      type: command
+      commands:
+        - command: [/bin/true]

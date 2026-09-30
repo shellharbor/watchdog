@@ -72,6 +72,15 @@ projects.
 - `status_page.uptime` is opt-in and requires `history.enabled: true`. It
   renders only sampled, observed availability from history: preserve grey
   intervals when no record exists and never present the bars as an SLA.
+- `metrics.heartbeat.enabled` is opt-in scheduler liveness, not a service
+  health signal. Emit `<prefix>_heartbeat_timestamp_seconds` only after a
+  complete normal run and only with configured static labels; an unavailable
+  service still refreshes it. Never refresh it for dry runs, read-only
+  commands, configuration/runtime failures, or manual `-s` partial runs.
+  Retain the last full-run timestamp atomically so a partial metrics rewrite
+  exports the old timestamp rather than removing or refreshing the series.
+  Keep the Grafana dashboard and Prometheus/Alertmanager assets under
+  `observability/` synchronized with exported metric names and labels.
 - `--dry-run` may perform checks but must not persist state/history/metrics or
   send notifications, run actions, or run hooks. `validate`, `status`,
   `--report`, and `--trend` must not run checks. `status`, reports, and trends
@@ -120,14 +129,20 @@ configuration/schema test and broader regression coverage:
 
 ```bash
 bash ./scripts/build-watchdog.sh --check
-bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh lib/watchdog/*.sh tests/*.sh
+bash ./scripts/release-preflight.sh vX.Y.Z # before creating a release tag
+bash -n service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh scripts/release-preflight.sh lib/watchdog/*.sh tests/*.sh
 bash -n scripts/github-action-entrypoint.sh packaging/docker/*.sh
-shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh scripts/github-action-entrypoint.sh packaging/docker/*.sh tests/*.sh
+shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh scripts/release-preflight.sh scripts/github-action-entrypoint.sh packaging/docker/*.sh tests/*.sh
 bash ./tests/versioning.sh
 bash ./tests/run-all.sh
 bash ./tests/docker-runtime.sh --docker
 bash ./tests/docker-runtime.sh --docker-socket
 ```
+
+Before creating a release tag, run `scripts/release-preflight.sh` with that
+exact tag. It is the same check used by the release workflow and the versioning
+test, so `VERSION`, generated CLI output, README archive instructions,
+changelog, and installer metadata cannot silently drift apart.
 
 `tests/run-all.sh` is the authoritative inventory and rejects unregistered test
 scripts. `tests/build.sh` keeps the generated distribution synchronized with

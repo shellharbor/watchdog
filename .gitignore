@@ -92,6 +92,7 @@ release/
 scripts/*
 !scripts/build-watchdog.sh
 !scripts/github-action-entrypoint.sh
+!scripts/release-preflight.sh
 .windsurfrules
 AGENTS.md
 AI_CONTEXT.md

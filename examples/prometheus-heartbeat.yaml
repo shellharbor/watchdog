@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/shellharbor/watchdog/main/schema/watchdog.schema.json
+settings:
+  log_file: /var/log/service-watchdog/prometheus.log
+  lock_file: /run/lock/service-watchdog-prometheus.lock
+  state_directory: /var/lib/service-watchdog/prometheus
+
+metrics:
+  enabled: true
+  textfile_directory: /var/lib/node_exporter/textfile_collector
+  filename: watchdog.prom
+  prefix: watchdog
+  static_labels:
+    instance: prod-web-01
+    environment: production
+  heartbeat:
+    enabled: true
+
+services:
+  - name: public-api
+    check:
+      type: http
+      url: https://api.example.com/health
+      success_status: [200]
+      timeout: 10
+      attempts: 2
+
+# Load observability/prometheus/watchdog-alerts.yml into Prometheus and import
+# observability/grafana/watchdog-overview.json after setting the datasource.

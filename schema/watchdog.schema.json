@@ -386,8 +386,9 @@
       "textfile_directory": { "$ref": "#/$defs/absolutePath", "description": "node_exporter textfile collector directory." },
       "filename": { "type": "string", "minLength": 1, "pattern": "^[^/]+$", "description": "Metrics file name, not a path." },
       "prefix": { "type": "string", "pattern": "^[A-Za-z_:][A-Za-z0-9_:]*$", "description": "Prometheus metric name prefix." },
-      "static_labels": { "type": "object", "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": { "enum": ["service", "check_type"] } }, "additionalProperties": { "type": ["string", "integer", "number", "boolean"] }, "description": "Additional scalar labels; service and check_type are reserved." }
-    }, "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["textfile_directory", "filename", "prefix"] }, "additionalProperties": false },
+      "static_labels": { "type": "object", "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "not": { "enum": ["service", "check_type"] } }, "additionalProperties": { "type": ["string", "integer", "number", "boolean"] }, "description": "Additional scalar labels; service and check_type are reserved." },
+      "heartbeat": { "type": "object", "properties": { "enabled": { "type": "boolean", "default": false, "description": "Emit a timestamp only after a complete normal monitor run; it is intended to alert on a missing scheduler run, not unhealthy services." } }, "additionalProperties": false, "description": "Optional scheduler heartbeat metric." }
+    }, "allOf": [{ "if": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] }, "then": { "required": ["textfile_directory", "filename", "prefix"] } }, { "if": { "properties": { "heartbeat": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }, "required": ["heartbeat"] }, "then": { "properties": { "enabled": { "const": true } }, "required": ["enabled"] } }], "additionalProperties": false },
     "statusPage": { "type": "object", "properties": {
       "enabled": { "type": "boolean", "default": false, "description": "Generate a static status page." },
       "output_directory": { "$ref": "#/$defs/absolutePath", "description": "Directory for generated page files." },

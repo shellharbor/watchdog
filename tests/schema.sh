@@ -65,6 +65,8 @@ expected_fields = {
     "email-secrets": "notifications.email.smtp.password_env",
     "history-relative-path": "history.path",
     "history-storage": "history.storage",
+    "metrics-heartbeat-disabled": "metrics.heartbeat.enabled",
+    "metrics-heartbeat-property": "metrics.heartbeat.unexpected",
     "http-header-values": "services[0].check.headers[0]",
     "http-json-assertion": "services[0].check.expect.json[0]",
     "http-json-path": "services[0].check.expect.json[0].path",

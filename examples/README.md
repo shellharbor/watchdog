@@ -20,6 +20,7 @@ service names, and commands before enabling scheduled runs.
 | [`smtp-email.yaml`](smtp-email.yaml) | Send built-in SMTP email on failure and recovery transitions |
 | [`telegram-notifications.yaml`](telegram-notifications.yaml) | Send Telegram transition notifications with a bot token from the environment |
 | [`market-data-server.yaml`](market-data-server.yaml) | Monitor PostgreSQL and a Go service with separate liveness/readiness, backoff, flapping, escalation, metrics, and an enforced action allowlist |
+| [`prometheus-heartbeat.yaml`](prometheus-heartbeat.yaml) | Publish service metrics plus a scheduler heartbeat for the bundled Grafana and Alertmanager assets |
 | [`auto-discovery/`](auto-discovery) | Generate a draft `services:` fragment from static Compose and systemd files |
 | [`notify-test.yaml`](notify-test.yaml) | Test notification delivery explicitly after filling in SMTP settings and secrets |
 | [`status-cli.yaml`](status-cli.yaml) | Read a service's persisted state with the terminal `status` command |

@@ -1,0 +1,18 @@
+settings:
+  log_file: /tmp/watchdog-heartbeat-property-invalid.log
+  lock_file: /tmp/watchdog-heartbeat-property-invalid.lock
+  state_directory: /tmp/watchdog-heartbeat-property-invalid-state
+metrics:
+  enabled: true
+  textfile_directory: /tmp/watchdog-heartbeat-property-metrics
+  filename: watchdog.prom
+  prefix: watchdog
+  heartbeat:
+    enabled: true
+    unexpected: true
+services:
+  - name: api
+    check:
+      type: command
+      commands:
+        - command: [/bin/true]

@@ -1,0 +1,35 @@
+# Load through Prometheus rule_files. Tune the stale-heartbeat threshold and
+# duration to at least twice the interval of the Watchdog timer or cron job.
+groups:
+  - name: watchdog
+    interval: 30s
+    rules:
+      - alert: WatchdogHeartbeatMissing
+        expr: time() - watchdog_heartbeat_timestamp_seconds > 900
+        for: 5m
+        labels:
+          severity: warning
+          component: watchdog
+        annotations:
+          summary: Watchdog heartbeat is stale on {{ $labels.instance }}
+          description: No completed full Watchdog run has been recorded within the configured heartbeat threshold. Check the timer or cron job, configuration validation, and the Watchdog log.
+
+      - alert: WatchdogServiceUnavailable
+        expr: watchdog_service_state == 1
+        for: 2m
+        labels:
+          severity: critical
+          component: watchdog
+        annotations:
+          summary: Watchdog reports {{ $labels.service }} unavailable on {{ $labels.instance }}
+          description: The service has an unavailable state. Inspect Watchdog state, notifications, and remediation history.
+
+      - alert: WatchdogServiceDegraded
+        expr: watchdog_service_state == 4
+        for: 5m
+        labels:
+          severity: warning
+          component: watchdog
+        annotations:
+          summary: Watchdog reports {{ $labels.service }} degraded on {{ $labels.instance }}
+          description: The service is responding but violates a degraded-health condition such as an HTTP latency SLO.

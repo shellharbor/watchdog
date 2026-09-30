@@ -15,12 +15,4 @@ jobs:
 
       - name: Verify version, CLI, documentation, and tag
         shell: bash
-        run: |
-          set -euo pipefail
-          bash ./scripts/build-watchdog.sh --check
-          version="$(tr -d '\r\n' < VERSION)"
-          [[ "${GITHUB_REF_NAME}" == "v${version}" ]]
-          [[ "$(bash ./service-watchdog.sh --version)" == "service-watchdog.sh ${version}" ]]
-          grep -F "/refs/tags/v${version}.zip" README.md >/dev/null
-          grep -F "watchdog-${version}" README.md >/dev/null
-          grep -F "## [${version}]" CHANGELOG.md >/dev/null
+        run: bash ./scripts/release-preflight.sh "${GITHUB_REF_NAME}"

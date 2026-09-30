@@ -7,8 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.7.5] - 2026-09-30
+
 ### Added
 
+- Opt-in Prometheus scheduler heartbeat metric
+  (`<prefix>_heartbeat_timestamp_seconds`), emitted only after Watchdog
+  completes a full normal monitor run and deliberately separate from service
+  health. The metric carries only configured static labels, and cannot be
+  refreshed by dry runs, read-only commands, runtime errors, or partial runs;
+  partial metrics rewrites retain the previous timestamp instead of removing it.
+- Ready observability assets: an importable Grafana Watchdog overview dashboard,
+  Prometheus rules for stale heartbeat/unavailable/degraded services, and a
+  secret-free Alertmanager routing snippet.
 - Limited, opt-in JSON assertions for HTTP checks through `expect.json`.
   Operators can match exact typed scalar fields or regex-match selected string
   fields through safe root/property/index paths, without evaluating expressions
@@ -27,6 +38,10 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Docker runtime regression coverage for a read-only/non-root healthy cycle,
   invalid configuration exit status, configuration-only healthcheck, graceful
   signal handling, and the separately opt-in Docker socket image.
+- A reusable release preflight that validates the intended tag against
+  `VERSION`, generated CLI version, README archive instructions, changelog
+  heading, and installer metadata before a release is created. The release
+  workflow and versioning test now invoke this same check.
 
 ### Fixed
 
@@ -235,7 +250,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Quick Start now uses the stable `v1.0.3` source archive.
 - Expanded repository ignore rules and troubleshooting documentation.
 
-[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.7.5...HEAD
+[1.7.5]: https://github.com/shellharbor/watchdog/compare/v1.7.4...v1.7.5
 [1.4.0]: https://github.com/shellharbor/watchdog/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/shellharbor/watchdog/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/shellharbor/watchdog/compare/v1.1.8...v1.2.0

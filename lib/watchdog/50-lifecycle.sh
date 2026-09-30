@@ -420,11 +420,56 @@ prometheus_labels() {
     done
 }
 
+prometheus_static_labels() {
+    local count index key value separator=""
+
+    count="$(yaml_read '.metrics.static_labels // {} | length')"
+    for ((index = 0; index < count; index++)); do
+        key="$(yaml_read ".metrics.static_labels | to_entries[$index].key")"
+        value="$(yaml_read ".metrics.static_labels | to_entries[$index].value")"
+        printf '%s%s="%s"' "$separator" "$key" "$(escape_prometheus_label_value "$value")"
+        separator=,
+    done
+}
+
+metrics_heartbeat_marker_file() {
+    printf '%s/metrics-heartbeat.timestamp' "$STATE_DIRECTORY"
+}
+
+read_metrics_heartbeat_timestamp() {
+    local file timestamp=""
+
+    file="$(metrics_heartbeat_marker_file)"
+    if [[ -r "$file" ]]; then
+        IFS= read -r timestamp <"$file" || true
+    fi
+    [[ "$timestamp" =~ ^[0-9]+$ ]] || timestamp=0
+    printf '%s' "$timestamp"
+}
+
+write_metrics_heartbeat_timestamp() {
+    local timestamp="$1" file temporary
+
+    [[ "$timestamp" =~ ^[0-9]+$ ]] || return 1
+    file="$(metrics_heartbeat_marker_file)"
+    temporary="${file}.tmp.$$"
+    if ! printf '%s\n' "$timestamp" >"$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    chmod 0640 "$temporary" 2>/dev/null || true
+    if ! mv -f -- "$temporary" "$file"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+}
+
 write_prometheus_metrics() {
     local target temporary service_count index service_name check_type state state_value now
     local last_check last_transition failures checks remediations outage labels metric_prefix
     local errors remediation_success remediation_failed incidents incident_active incident_started incident_duration last_incident_duration
     local last_success escalations blocked_dependency blocked_backoff blocked_flapping flapping_active backoff_until backoff_remaining http_total_ms http_latency_threshold_ms
+    local heartbeat_labels heartbeat_timestamp metric_families=22
     (( METRICS_ENABLED == 1 )) || return 0
     if (( DRY_RUN == 1 )); then
         log INFO 'result=metrics-skipped reason=dry-run'
@@ -448,7 +493,33 @@ write_prometheus_metrics() {
     metric_prefix="$(sanitize_prometheus_metric_name "$METRICS_PREFIX")"
     now="$(date '+%s')"
     service_count="$(yaml_read '.services | length')"
+    heartbeat_labels=""
+    heartbeat_timestamp=0
+    if (( METRICS_HEARTBEAT_ENABLED == 1 )); then
+        if [[ -z "$ONLY_SERVICE" ]]; then
+            if write_metrics_heartbeat_timestamp "$now"; then
+                heartbeat_timestamp="$now"
+            else
+                log ERROR "result=metrics-heartbeat-failed file=$(metrics_heartbeat_marker_file) reason=state-write"
+            fi
+        else
+            heartbeat_timestamp="$(read_metrics_heartbeat_timestamp)"
+        fi
+    fi
+    if (( 10#$heartbeat_timestamp > 0 )); then
+        heartbeat_labels="$(prometheus_static_labels)"
+        metric_families=23
+    fi
     {
+        if (( 10#$heartbeat_timestamp > 0 )); then
+            printf '# HELP %s_heartbeat_timestamp_seconds Unix timestamp of the latest completed full Watchdog run\n' "$metric_prefix"
+            printf '# TYPE %s_heartbeat_timestamp_seconds gauge\n' "$metric_prefix"
+            if [[ -n "$heartbeat_labels" ]]; then
+                printf '%s_heartbeat_timestamp_seconds{%s} %s\n' "$metric_prefix" "$heartbeat_labels" "$heartbeat_timestamp"
+            else
+                printf '%s_heartbeat_timestamp_seconds %s\n' "$metric_prefix" "$heartbeat_timestamp"
+            fi
+        fi
         printf '# HELP %s_service_state Service state (0=healthy, 1=unavailable, 2=unknown, 3=dependency_failed, 4=degraded, 5=recovering)\n' "$metric_prefix"
         printf '# TYPE %s_service_state gauge\n' "$metric_prefix"
         printf '# HELP %s_service_last_check_timestamp Unix timestamp of the last check attempt\n' "$metric_prefix"
@@ -558,7 +629,7 @@ write_prometheus_metrics() {
     } >"$temporary" || { rm -f -- "$temporary"; log ERROR "result=metrics-failed file=${target} reason=write"; return 0; }
     chmod 0644 "$temporary" 2>/dev/null || true
     if mv -f -- "$temporary" "$target"; then
-        log INFO "result=metrics-written file=${target} services=${service_count} metrics=22"
+        log INFO "result=metrics-written file=${target} services=${service_count} metrics=${metric_families}"
     else
         rm -f -- "$temporary"
         log ERROR "result=metrics-failed file=${target} reason=rename"

@@ -275,6 +275,22 @@ official `bash:4.3.48` container to protect the documented compatibility floor.
 The CI workflow also builds the public Docker Action and verifies valid and
 invalid configuration exit codes.
 
+## Preparing a repository release
+
+Update `VERSION`, the stable archive URL and directory name in `README.md`, and
+the dated changelog section before creating a tag. Then run the shared
+preflight with the exact intended tag:
+
+```bash
+bash ./scripts/release-preflight.sh vX.Y.Z
+```
+
+It confirms the tag matches `VERSION`, the generated CLI reports that version,
+the README points to the matching source archive, the changelog has a matching
+heading, and the installer copies `VERSION`. The `Release metadata` GitHub
+Actions workflow invokes the same script after a tag push, but passing it
+locally catches a mismatch before an immutable release tag exists.
+
 ## Get help with useful evidence
 
 When opening an issue, include the Watchdog version/commit, Linux and `yq`
