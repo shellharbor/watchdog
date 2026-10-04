@@ -84,6 +84,17 @@ projects.
   Compose `depends_on`, host networking or paths, privileged mode, or the
   Docker socket by default. Kubernetes manifests, Helm charts, and an
   orchestrator dependency are not implied unless the user requests them.
+- Kubernetes deployment is a Helm 3 chart under `charts/watchdog/`, not a
+  controller or a Deployment: Watchdog runs as a finite `CronJob` and optional
+  manual `Job`, and its `0`/`1`/`2` exit status is the health signal. Preserve
+  the suspended-by-default schedule, `Forbid` concurrency policy, persistent
+  transition state, ConfigMap-only configuration, existing-Secret `*_env`
+  injection, and non-root pod contract. The chart must never gain RBAC,
+  service-account token mounting, host paths/networking, privileged access, a
+  Docker socket, or a Docker CLI profile. Keep `tests/kubernetes_chart.py` and
+  `tests/kubernetes_integration.py` aligned with the chart and run them through
+  the isolated kind workflow; the latter must never address a user kubeconfig
+  or cluster.
 - `status_page.uptime` is opt-in and requires `history.enabled: true`. It
   renders only sampled, observed availability from history: preserve grey
   intervals when no record exists and never present the bars as an SLA.
@@ -152,6 +163,9 @@ bash ./tests/versioning.sh
 bash ./tests/run-all.sh
 bash ./tests/docker-runtime.sh --docker
 bash ./tests/docker-runtime.sh --docker-socket
+helm lint charts/watchdog --strict
+python3 ./tests/kubernetes_chart.py
+python3 ./tests/kubernetes_integration.py
 ```
 
 Before creating a release tag, run `scripts/release-preflight.sh` with that

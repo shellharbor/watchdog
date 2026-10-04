@@ -17,4 +17,5 @@ watchdog-discover.sh
 install.sh
 lib
 schema
+charts
 packaging/systemd

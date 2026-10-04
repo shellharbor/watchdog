@@ -12,6 +12,11 @@ built from [`packaging/docker/Dockerfile`](../packaging/docker/Dockerfile).
 This is distinct from the root `Dockerfile`, which belongs exclusively to the
 GitHub Marketplace configuration-validation Action.
 
+For Kubernetes 1.31+, use the separate [Kubernetes Deployment](Kubernetes-Deployment.md)
+guide and Helm CronJob chart. It preserves Watchdog's finite lifecycle and
+least-privilege container contract; Kubernetes is not a Docker socket or host
+systemd integration surface.
+
 Copy the container-specific configuration, adapt its sample endpoint, and make
 the persistent directory writable by the image's fixed non-root user:
 

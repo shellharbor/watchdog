@@ -1,0 +1,80 @@
+name: Kubernetes
+
+on:
+  push:
+    paths:
+      - charts/watchdog/**
+      - examples/kubernetes/**
+      - tests/kubernetes_*.py
+      - packaging/docker/**
+      - service-watchdog.sh
+      - lib/watchdog/**
+      - VERSION
+      - .dockerignore
+      - .github/workflows/kubernetes.yml
+  pull_request:
+    paths:
+      - charts/watchdog/**
+      - examples/kubernetes/**
+      - tests/kubernetes_*.py
+      - packaging/docker/**
+      - service-watchdog.sh
+      - lib/watchdog/**
+      - VERSION
+      - .dockerignore
+      - .github/workflows/kubernetes.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kubernetes-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cronjob-contract:
+    name: Helm contract and real CronJob cycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install isolated, verified Kubernetes test tooling
+        env:
+          HELM_VERSION: 3.19.0
+          KIND_VERSION: 0.30.0
+          KUBECTL_VERSION: 1.34.0
+        run: |
+          set -Eeuo pipefail
+          tools="$RUNNER_TEMP/watchdog-kubernetes-tools"
+          mkdir -p "$tools"
+          curl --fail --silent --show-error --location "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" -o "$tools/helm.tar.gz"
+          curl --fail --silent --show-error --location "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz.sha256sum" -o "$tools/helm.sha256sum"
+          expected="$(awk '{print $1}' "$tools/helm.sha256sum")"
+          echo "$expected  $tools/helm.tar.gz" | sha256sum --check -
+          tar -xzf "$tools/helm.tar.gz" -C "$tools"
+          mv "$tools/linux-amd64/helm" "$tools/helm"
+          curl --fail --silent --show-error --location "https://kind.sigs.k8s.io/dl/v${KIND_VERSION}/kind-linux-amd64" -o "$tools/kind"
+          curl --fail --silent --show-error --location "https://kind.sigs.k8s.io/dl/v${KIND_VERSION}/kind-linux-amd64.sha256sum" -o "$tools/kind.sha256sum"
+          expected="$(awk '{print $1}' "$tools/kind.sha256sum")"
+          echo "$expected  $tools/kind" | sha256sum --check -
+          curl --fail --silent --show-error --location "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl" -o "$tools/kubectl"
+          curl --fail --silent --show-error --location "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256" -o "$tools/kubectl.sha256"
+          echo "$(cat "$tools/kubectl.sha256")  $tools/kubectl" | sha256sum --check -
+          chmod +x "$tools/helm" "$tools/kind" "$tools/kubectl"
+          echo "$tools" >> "$GITHUB_PATH"
+          python3 -m venv "$tools/python"
+          "$tools/python/bin/python" -m pip install --disable-pip-version-check PyYAML==6.0.2
+          echo "$tools/python/bin" >> "$GITHUB_PATH"
+
+      - name: Lint the chart and test rendering safety gates
+        run: |
+          helm lint charts/watchdog --strict
+          python tests/kubernetes_chart.py
+
+      - name: Build the production runtime image
+        run: docker build --file packaging/docker/Dockerfile --target runtime --tag watchdog:kubernetes-test .
+
+      - name: Exercise a real CronJob in an isolated kind cluster
+        run: python tests/kubernetes_integration.py

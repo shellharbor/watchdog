@@ -30,6 +30,7 @@ service names, and commands before enabling scheduled runs.
 | [`notification-routing.yaml`](notification-routing.yaml) | Route a service to selected channels with severity and a runbook link |
 | [`remote-http-remediation.yaml`](remote-http-remediation.yaml) | Invoke an allowlisted remote API safely as remediation |
 | [`../docker-compose.example.yml`](../docker-compose.example.yml) | Run the non-root, one-shot production container with deliberate config and state mounts |
+| [`kubernetes/`](kubernetes) | Deploy the same production image as a suspended, least-privilege Helm CronJob with durable state |
 
 Validate YAML and policy without running any checks or creating runtime state:
 

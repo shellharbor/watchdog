@@ -3,6 +3,7 @@
 ![Watchdog Hero Banner](https://i.postimg.cc/XYzDRyfV/watchdog-monitoring-shell-bash-hero.jpg)
 
 [![CI](https://github.com/shellharbor/watchdog/actions/workflows/ci.yml/badge.svg)](https://github.com/shellharbor/watchdog/actions/workflows/ci.yml)
+[![Kubernetes](https://github.com/shellharbor/watchdog/actions/workflows/kubernetes.yml/badge.svg)](https://github.com/shellharbor/watchdog/actions/workflows/kubernetes.yml)
 [![CodeQL](https://github.com/shellharbor/watchdog/actions/workflows/codeql.yml/badge.svg)](https://github.com/shellharbor/watchdog/actions/workflows/codeql.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/shellharbor/watchdog/badge)](https://scorecard.dev/viewer/?uri=github.com/shellharbor/watchdog)
 [![GitHub release](https://img.shields.io/github/v/release/shellharbor/watchdog)](https://github.com/shellharbor/watchdog/releases)
@@ -84,14 +85,14 @@ yq --version  # Must report Mike Farah yq version v4.x.x
 
 ## Quick start
 
-Download the stable `v1.7.6` source archive from GitHub:
+Download the stable `v1.7.8` source archive from GitHub:
 
 ```bash
 curl -fL \
-  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.7.6.zip \
+  https://github.com/shellharbor/watchdog/archive/refs/tags/v1.7.8.zip \
   -o watchdog.zip
 unzip watchdog.zip
-cd watchdog-1.7.6
+cd watchdog-1.7.8
 ```
 
 Alternatively, clone the repository with Git:
@@ -249,6 +250,48 @@ provenance and an SBOM. Docker Hub is optional: set repository secrets
 `docker.io/<username>/watchdog`; without both secrets its job is skipped while
 GHCR publication continues. Make the first GHCR package public in GitHub's
 package settings if it should be anonymously pullable.
+
+## Run Watchdog in Kubernetes
+
+Watchdog is a finite monitoring cycle, so Kubernetes support uses a Helm 3
+`CronJob` rather than a long-running Deployment. The chart supports Kubernetes
+1.31+ and starts with its schedule suspended. It creates a ConfigMap from the
+same Watchdog YAML, mounts persistent state by default, and runs the existing
+non-root production image. A Job's completion and its `0`/`1`/`2` exit code are
+the health signals; Kubernetes does not use the image's Docker `HEALTHCHECK`.
+
+Install it in the namespace that owns the state PVC. Copy the safe starting
+values, replace the endpoint, choose storage, and validate before enabling the
+schedule:
+
+```bash
+cp examples/kubernetes/values.yaml values.yaml
+helm lint charts/watchdog --strict -f values.yaml
+helm upgrade --install watchdog ./charts/watchdog -n monitoring -f values.yaml \
+  --set manual.enabled=true
+
+# The optional Job runs `validate` with the mounted configuration.
+kubectl -n monitoring wait --for=condition=complete job/watchdog-watchdog-validate --timeout=10m
+kubectl -n monitoring logs job/watchdog-watchdog-validate
+```
+
+Disable `manual.enabled` after the completed Job, run one actual CronJob-derived
+cycle, then set `schedule.suspend: false` only after that cycle succeeds.
+Persistent state is important: it retains failure/recovery transitions and the
+existing lock between CronJob Pods. The chart creates a retained state PVC by
+default; set `state.existingClaim` to use an operator-owned PVC, or disable
+persistence only when losing transition continuity is acceptable. Production
+deployments should pin `image.digest` after verifying the desired published
+image.
+
+The chart never creates Kubernetes Secrets. Use the normal Watchdog `*_env`
+fields in `config`, create a Secret outside Helm, then set `envFromSecret` to
+its name. It creates no RBAC resources, disables service-account token mounts,
+and permits no host paths, host networking, privileged containers, Docker
+socket, or Docker CLI profile. It cannot execute host `systemctl` or Docker
+remediation; prefer remote HTTP remediation or Kubernetes-native automation.
+See the [Kubernetes deployment guide](wiki/Kubernetes-Deployment.md) for the
+full storage, Secret, scheduling, upgrade, and rollback procedure.
 
 ## Validate configuration in GitHub Actions
 
@@ -1214,7 +1257,7 @@ heartbeat, a partial run re-exports the previous timestamp without refreshing
 it; it therefore cannot make the scheduler look healthy.
 
 Ready-to-import observability assets are included in
-[`observability/`](observability/): a Grafana overview dashboard, Prometheus
+[`observability/`](observability): a Grafana overview dashboard, Prometheus
 alert rules for stale heartbeat/unavailable/degraded services, and an
 Alertmanager routing snippet. Import the dashboard, load the rules through
 Prometheus, then set the heartbeat threshold to at least twice the interval of
@@ -1939,6 +1982,10 @@ bash -n scripts/github-action-entrypoint.sh
 shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh scripts/github-action-entrypoint.sh tests/*.sh
 bash ./tests/versioning.sh
 bash ./tests/run-all.sh
+# With Helm 3, kind, kubectl, and PyYAML available:
+helm lint charts/watchdog --strict
+python3 ./tests/kubernetes_chart.py
+python3 ./tests/kubernetes_integration.py
 ```
 
 `tests/run-all.sh` is the authoritative regression inventory. It fails if a
@@ -1956,6 +2003,9 @@ of certificate data in operational logs.
 `yq` parser invocations used for configuration reads.
 `tests/build.sh` checks that the generated distribution is current and exactly
 matches a fresh build from the source modules.
+The separate **Kubernetes** workflow verifies the chart and production image
+inside an isolated kind cluster; it never reads a maintainer kubeconfig or
+touches an external cluster.
 
 ## License
 

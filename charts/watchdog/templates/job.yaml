@@ -1,0 +1,16 @@
+{{- if .Values.manual.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "watchdog.fullname" . }}-{{ .Values.manual.name }}
+  labels:
+    {{- include "watchdog.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 0
+  parallelism: 1
+  completions: 1
+  activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  template:
+    {{- include "watchdog.pod" (dict "root" . "args" .Values.manual.args) | nindent 4 }}
+{{- end }}

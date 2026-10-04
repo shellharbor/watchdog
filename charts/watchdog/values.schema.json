@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ShellHarbor Watchdog Helm chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": {"type": "string", "maxLength": 50},
+    "fullnameOverride": {"type": "string", "maxLength": 50},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string"},
+        "digest": {"type": "string", "pattern": "^$|^sha256:[a-f0-9]{64}$"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {"name": {"type": "string", "minLength": 1}}
+      }
+    },
+    "config": {"type": "object", "minProperties": 1},
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "persistence": {"type": "boolean"},
+        "existingClaim": {"type": "string"},
+        "size": {"type": "string", "pattern": "^[1-9][0-9]*(Ki|Mi|Gi|Ti)$"},
+        "accessModes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"]}
+        },
+        "storageClass": {"type": ["string", "null"]}
+      }
+    },
+    "envFromSecret": {"type": "string"},
+    "env": {
+      "type": "object",
+      "additionalProperties": {"type": ["string", "number", "boolean"]}
+    },
+    "schedule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "value": {"type": "string", "minLength": 9, "maxLength": 100},
+        "timeZone": {"type": "string", "minLength": 1, "maxLength": 64},
+        "suspend": {"type": "boolean"}
+      }
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "activeDeadlineSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+        "ttlSecondsAfterFinished": {"type": "integer", "minimum": 0, "maximum": 604800},
+        "startingDeadlineSeconds": {"type": "integer", "minimum": 10, "maximum": 86400},
+        "successfulJobsHistoryLimit": {"type": "integer", "minimum": 0, "maximum": 10},
+        "failedJobsHistoryLimit": {"type": "integer", "minimum": 0, "maximum": 10}
+      }
+    },
+    "manual": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "name": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 45},
+        "args": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "tmp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"sizeLimit": {"type": "string", "pattern": "^[1-9][0-9]*(Ki|Mi|Gi)$"}}
+    },
+    "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+    "resources": {"type": "object", "minProperties": 1},
+    "podAnnotations": {"type": "object", "additionalProperties": {"type": "string"}},
+    "nodeSelector": {"type": "object", "additionalProperties": {"type": "string"}},
+    "affinity": {"type": "object"},
+    "tolerations": {"type": "array", "items": {"type": "object"}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"state": {"properties": {"persistence": {"const": false}}, "required": ["persistence"]}}},
+      "then": {"properties": {"state": {"properties": {"existingClaim": {"const": ""}}}}}
+    }
+  ]
+}

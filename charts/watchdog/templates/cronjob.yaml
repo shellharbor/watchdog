@@ -1,0 +1,25 @@
+{{- if .Values.schedule.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "watchdog.fullname" . }}
+  labels:
+    {{- include "watchdog.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule.value | quote }}
+  timeZone: {{ .Values.schedule.timeZone | quote }}
+  suspend: {{ .Values.schedule.suspend }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: {{ .Values.job.startingDeadlineSeconds }}
+  successfulJobsHistoryLimit: {{ .Values.job.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.job.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      parallelism: 1
+      completions: 1
+      activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+      ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+      template:
+        {{- include "watchdog.pod" (dict "root" . "args" (list)) | nindent 8 }}
+{{- end }}

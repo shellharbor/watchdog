@@ -20,6 +20,10 @@ and changelog are derived release documentation checked by CI.
    shellcheck service-watchdog.sh watchdog-discover.sh install.sh scripts/build-watchdog.sh scripts/release-preflight.sh tests/*.sh
    bash ./tests/versioning.sh
    bash ./tests/run-all.sh
+   # When changing the Helm chart or Kubernetes runtime contract:
+   helm lint charts/watchdog --strict
+   python3 ./tests/kubernetes_chart.py
+   python3 ./tests/kubernetes_integration.py
    ```
 
 7. Commit the release metadata and create an annotated `vX.Y.Z` tag.
@@ -28,6 +32,10 @@ and changelog are derived release documentation checked by CI.
    changelog heading, and installer metadata.
 9. Create the GitHub release from the verified tag and paste the matching
    changelog entry as its release notes.
+
+The `Kubernetes` workflow supplies pinned Helm, kind, kubectl, and PyYAML in an
+isolated runner. It should be green for a Kubernetes-facing release; its kind
+test uses a private kubeconfig and a temporary cluster only.
 
 Do not move or retag an already published release. Publish a corrective patch
 release instead.

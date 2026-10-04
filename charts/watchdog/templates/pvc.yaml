@@ -1,0 +1,19 @@
+{{- if and .Values.state.persistence (not .Values.state.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "watchdog.stateClaim" . }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "watchdog.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.state.accessModes | nindent 4 }}
+  {{- if ne .Values.state.storageClass nil }}
+  storageClassName: {{ .Values.state.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.state.size }}
+{{- end }}

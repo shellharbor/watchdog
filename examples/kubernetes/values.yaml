@@ -1,0 +1,41 @@
+# Helm values for a Kubernetes CronJob. Copy outside the repository, replace
+# the endpoint and select suitable persistent storage before enabling it.
+image:
+  repository: ghcr.io/shellharbor/watchdog
+  tag: "1.7.8"
+  # Prefer an immutable digest in production after verifying the published image.
+  digest: ""
+
+config:
+  settings:
+    log_file: /var/lib/watchdog/watchdog.log
+    lock_file: /tmp/watchdog.lock
+    state_directory: /var/lib/watchdog/state
+    default_timeout: 10
+    default_attempts: 2
+    default_retry_delay: 2
+  services:
+    - name: public-api
+      check:
+        type: http
+        url: https://api.example.com/health
+        success_status: [200, 204]
+        timeout: 10
+
+# Use an existing durable claim when cluster storage is managed separately.
+state:
+  persistence: true
+  existingClaim: watchdog-state
+
+# Create this Secret yourself; it supplies only values named by *_env fields in
+# the Watchdog configuration. Never put secret values into this file.
+envFromSecret: watchdog-notification-env
+
+schedule:
+  value: "*/5 * * * *"
+  timeZone: Etc/UTC
+  suspend: true
+
+resources:
+  requests: {cpu: 50m, memory: 64Mi, ephemeral-storage: 128Mi}
+  limits: {cpu: "1", memory: 256Mi, ephemeral-storage: 512Mi}

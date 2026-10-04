@@ -7,6 +7,24 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [1.7.8] - 2026-10-04
+
+### Added
+
+- First-class Kubernetes support through a Helm 3 chart for Kubernetes 1.31+
+  that runs the existing production Watchdog image as a suspended-by-default,
+  finite CronJob or an explicit manual Job. It preserves Watchdog's one-shot
+  exit-code lifecycle rather than introducing a controller or daemon.
+- Durable state PVC support, operator-owned Secret environment references,
+  pinned-image digest support, bounded `/tmp`, explicit resources, CronJob
+  overlap protection, and an isolated non-root pod profile. The chart creates
+  no RBAC resources and does not mount a service-account token, host paths,
+  Docker socket, or privileged capabilities.
+- Kubernetes CI coverage: strict Helm linting, rendered-chart safety/negative
+  tests, and an actual runtime-image cycle in a private kind cluster that
+  checks success, durable state, lack of Docker socket access, and invalid
+  configuration exit handling.
+
 ## [1.7.6] - 2026-09-30
 
 ### Added
@@ -259,7 +277,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 - Quick Start now uses the stable `v1.0.3` source archive.
 - Expanded repository ignore rules and troubleshooting documentation.
 
-[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.7.6...HEAD
+[Unreleased]: https://github.com/shellharbor/watchdog/compare/v1.7.8...HEAD
+[1.7.8]: https://github.com/shellharbor/watchdog/compare/v1.7.6...v1.7.8
 [1.7.6]: https://github.com/shellharbor/watchdog/compare/v1.7.5...v1.7.6
 [1.7.5]: https://github.com/shellharbor/watchdog/compare/v1.7.4...v1.7.5
 [1.4.0]: https://github.com/shellharbor/watchdog/compare/v1.3.0...v1.4.0

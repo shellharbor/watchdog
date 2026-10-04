@@ -1,0 +1,83 @@
+# Install the chart in the namespace that owns the state PVC. Schedules start
+# suspended so an operator can validate the rendered configuration first.
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/shellharbor/watchdog
+  tag: "" # Defaults to Chart.appVersion; set digest to pin an immutable image.
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# This becomes a ConfigMap. Keep only *_env references here; inject secret
+# values through the pre-existing Secret named by envFromSecret.
+config:
+  settings:
+    log_file: /var/lib/watchdog/watchdog.log
+    lock_file: /tmp/watchdog.lock
+    state_directory: /var/lib/watchdog/state
+    default_timeout: 10
+    default_attempts: 2
+    default_retry_delay: 2
+  services:
+    - name: api
+      check:
+        type: http
+        url: https://api.example.com/health
+        success_status: [200]
+        timeout: 10
+
+# A durable state volume preserves failure/recovery transitions across CronJob
+# Pods. Set existingClaim to an operator-owned PVC or disable persistence only
+# when transition continuity is intentionally unnecessary.
+state:
+  persistence: true
+  existingClaim: ""
+  size: 1Gi
+  accessModes: [ReadWriteOnce]
+  storageClass: null # null uses the cluster default; "" disables provisioning.
+
+# An existing Secret whose keys are exported as environment variables. The chart
+# never creates Secrets and never renders secret values.
+envFromSecret: ""
+env: {} # Non-secret string, boolean, or numeric values only.
+
+schedule:
+  enabled: true
+  value: "*/5 * * * *"
+  timeZone: Etc/UTC
+  suspend: true
+
+job:
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 86400
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+
+# An opt-in finite Job for commands such as [validate], [status, --json], or
+# [notify-test, --channel, all]. Arguments remain literal argv values.
+manual:
+  enabled: false
+  name: validate
+  args: [validate]
+
+tmp:
+  sizeLimit: 64Mi
+terminationGracePeriodSeconds: 60
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+    ephemeral-storage: 128Mi
+  limits:
+    cpu: "1"
+    memory: 256Mi
+    ephemeral-storage: 512Mi
+
+podAnnotations: {}
+nodeSelector:
+  kubernetes.io/os: linux
+affinity: {}
+tolerations: []

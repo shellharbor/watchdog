@@ -7,3 +7,4 @@
 - [Operations, Status, and History](Operations-CLI-and-History.md)
 - [Discovery and Federation](Discovery-and-Federation.md)
 - [Deployment and Troubleshooting](Deployment-and-Troubleshooting.md)
+- [Kubernetes Deployment](Kubernetes-Deployment.md)
