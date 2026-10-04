@@ -76,6 +76,14 @@ projects.
   check process tree, wait for cleanup, and retain Watchdog's exit code. Docker
   daemon access belongs only in the explicit `-docker` image/profile and must
   never become a default mount, capability, privilege, or network setting.
+- Every new Dockerfile, Compose service, and microservice container contract
+  must stay Kubernetes-ready: one explicit non-root workload with graceful
+  signal handling; configuration and secrets through environment variables or
+  read-only mounts; only declared persistent storage; portable DNS/URLs; and
+  explicit health/readiness behavior. Never depend on fixed container names,
+  Compose `depends_on`, host networking or paths, privileged mode, or the
+  Docker socket by default. Kubernetes manifests, Helm charts, and an
+  orchestrator dependency are not implied unless the user requests them.
 - `status_page.uptime` is opt-in and requires `history.enabled: true`. It
   renders only sampled, observed availability from history: preserve grey
   intervals when no record exists and never present the bars as an SLA.

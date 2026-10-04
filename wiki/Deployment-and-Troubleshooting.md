@@ -72,6 +72,22 @@ mounted `/etc/watchdog/config.yaml` (or `WATCHDOG_CONFIG`), deliberate output
 mounts, secret environment variables, one command, and its exit status. No
 agent implementation is required for this contract.
 
+### Kubernetes-ready container contract
+
+Docker Compose is a local deployment description, not an application
+dependency. New Dockerfiles, Compose services, and future microservices should
+remain portable to Kubernetes: use one explicit non-root workload, forward
+`SIGTERM`/`SIGINT` for graceful cleanup, keep configuration and secrets in
+environment variables or read-only mounts, and declare every writable or
+persistent location.
+
+Do not make application behavior depend on fixed container names, Compose
+network names, `depends_on` health ordering, host networking or paths,
+privileged mode, or the Docker socket. Use configurable DNS names or URLs,
+application-level readiness/retries, and explicit health/readiness behavior
+instead. This contract does not require Kubernetes manifests or Helm charts;
+those are added only when a deployment request calls for them.
+
 ### Docker socket remediation is exceptional
 
 The `watchdog-docker-actions` service is inactive unless the
