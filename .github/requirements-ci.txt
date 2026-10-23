@@ -2,8 +2,9 @@
 # Versions and wheel SHA-256 digests are from the official PyPI release JSON.
 # Install with --require-hashes --only-binary=:all:; no source builds in CI.
 # Update transitive pins/hashes together and run pip check and schema tests.
-attrs==25.3.0 \
-    --hash=sha256:427318ce031701fea540783410126f03899a97ffc6f61596ad581ac2e40e3bc3
+attrs==26.1.0 \
+    --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309 \
+    --hash=sha256:d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32
 jsonschema==4.25.1 \
     --hash=sha256:3fba0169e345c7175110351d456342c364814cfcf3b964ba4587f22915230a63
 jsonschema-specifications==2025.9.1 \
